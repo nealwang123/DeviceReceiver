@@ -1,0 +1,150 @@
+﻿#include "SerialReceiver.h"
+#include "DataCacheManager.h"
+#include <QDateTime>
+#include <QDebug>
+#include <QRandomGenerator>
+#include <QTimer>
+#include <cstring>
+
+SerialReceiver::SerialReceiver(QObject *parent) : QObject(parent)
+{
+    m_serialPort = new QSerialPort(this);
+    m_mockTimer = new QTimer(this);
+
+    // 连接串口信号
+    connect(m_serialPort, &QSerialPort::readyRead, this, &SerialReceiver::onSerialReadyRead);
+    // 连接模拟数据定时器
+    connect(m_mockTimer, &QTimer::timeout, this, &SerialReceiver::onMockDataTimer);
+}
+
+SerialReceiver::~SerialReceiver()
+{
+    closeSerial();
+    m_mockTimer->stop();
+}
+
+bool SerialReceiver::openSerial(const QString& portName, int baudRate)
+{
+    m_serialPort->setPortName(portName);
+    m_serialPort->setBaudRate(baudRate);
+    m_serialPort->setDataBits(QSerialPort::Data8);
+    m_serialPort->setParity(QSerialPort::NoParity);
+    m_serialPort->setStopBits(QSerialPort::OneStop);
+    m_serialPort->setFlowControl(QSerialPort::NoFlowControl);
+
+    if (m_serialPort->open(QIODevice::ReadOnly)) {
+        qInfo() << QString("串口[%1]打开成功，波特率：%2").arg(portName).arg(baudRate);
+        m_serialBuffer.clear();
+        return true;
+    } else {
+        qCritical() << QString("串口[%1]打开失败：%2").arg(portName).arg(m_serialPort->errorString());
+        return false;
+    }
+}
+
+void SerialReceiver::closeSerial()
+{
+    if (m_serialPort->isOpen()) {
+        m_serialPort->close();
+        qInfo() << "串口已关闭";
+    }
+}
+
+bool SerialReceiver::isSerialOpen() const
+{
+    return m_serialPort->isOpen();
+}
+
+void SerialReceiver::startMockData(int intervalMs)
+{
+    qInfo() << QString("开启模拟数据，间隔：%1ms").arg(intervalMs);
+    m_mockTimer->setInterval(intervalMs);
+    m_mockTimer->start();
+}
+
+void SerialReceiver::onSerialReadyRead()
+{
+    m_serialBuffer.append(m_serialPort->readAll());
+    processSerialBuffer();
+}
+
+void SerialReceiver::onMockDataTimer()
+{
+    // 生成模拟帧数据（无硬件时测试用）
+    FrameData frame;
+    frame.timestamp = QDateTime::currentMSecsSinceEpoch();
+    frame.frameId = QRandomGenerator::global()->bounded(10000);
+    frame.temperature = 20 + QRandomGenerator::global()->bounded(60.0); // 20-80℃
+    frame.humidity = 30 + QRandomGenerator::global()->bounded(50.0);   // 30-80%
+    frame.voltage = 3.0 + QRandomGenerator::global()->bounded(1.5);    // 3.0-4.5V
+    frame.isAlarm = (frame.temperature > 75); // 模拟报警
+
+    // 写入缓存
+    DataCacheManager::instance()->addFrame(frame);
+
+    qDebug() << QString("模拟帧[%1]：温度=%2℃ 湿度=%3% 电压=%4V 报警=%5")
+                .arg(frame.frameId)
+                .arg(frame.temperature, 0, 'f', 1)
+                .arg(frame.humidity, 0, 'f', 1)
+                .arg(frame.voltage, 0, 'f', 1)
+                .arg(frame.isAlarm ? "是" : "否");
+}
+
+void SerialReceiver::processSerialBuffer()
+{
+    while (m_serialBuffer.size() >= FRAME_LENGTH) {
+        int headIndex = m_serialBuffer.indexOf(FRAME_HEAD);
+        if (headIndex == -1) {
+            m_serialBuffer.clear();
+            qWarning() << "无有效帧头，清空缓存";
+            break;
+        }
+
+        if (m_serialBuffer.size() < headIndex + FRAME_LENGTH) {
+            break; // 数据不足，等待下一次
+        }
+
+        // 提取完整帧
+        QByteArray rawFrame = m_serialBuffer.mid(headIndex, FRAME_LENGTH);
+        m_serialBuffer.remove(0, headIndex + FRAME_LENGTH);
+
+        // 解析并写入缓存
+        FrameData frame = parseRawData(rawFrame);
+        frame.timestamp = QDateTime::currentMSecsSinceEpoch();
+        DataCacheManager::instance()->addFrame(frame);
+
+        qDebug() << QString("解析帧[%1]：温度=%2℃ 湿度=%3% 电压=%4V 报警=%5")
+                    .arg(frame.frameId)
+                    .arg(frame.temperature, 0, 'f', 1)
+                    .arg(frame.humidity, 0, 'f', 1)
+                    .arg(frame.voltage, 0, 'f', 1)
+                    .arg(frame.isAlarm ? "是" : "否");
+    }
+}
+
+FrameData SerialReceiver::parseRawData(const QByteArray& rawFrame)
+{
+    FrameData frame;
+    // ========== 替换为你的硬件实际解析逻辑 ==========
+    if (rawFrame.size() == FRAME_LENGTH) {
+        // 使用memcpy避免内存对齐问题
+        uint16_t frameId;
+        std::memcpy(&frameId, rawFrame.data() + 2, sizeof(uint16_t));
+        frame.frameId = frameId;
+        
+        float temperature;
+        std::memcpy(&temperature, rawFrame.data() + 4, sizeof(float));
+        frame.temperature = temperature;
+        
+        float humidity;
+        std::memcpy(&humidity, rawFrame.data() + 8, sizeof(float));
+        frame.humidity = humidity;
+        
+        double voltage;
+        std::memcpy(&voltage, rawFrame.data() + 12, sizeof(double));
+        frame.voltage = voltage;
+        
+        frame.isAlarm = (rawFrame[15] & 0x01) == 1;
+    }
+    return frame;
+}
