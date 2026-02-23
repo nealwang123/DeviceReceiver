@@ -102,14 +102,18 @@ SOURCES += main.cpp \
            DataCacheManager.cpp \
            SerialReceiver.cpp \
            PlotWindow.cpp \
-           DataProcessor.cpp
+           DataProcessor.cpp \
+           ApplicationController.cpp \
+           AppConfig.cpp
 
 # 头文件列表
 HEADERS += FrameData.h \
            DataCacheManager.h \
            SerialReceiver.h \
            PlotWindow.h \
-           DataProcessor.h
+           DataProcessor.h \
+           ApplicationController.h \
+           AppConfig.h
 
 # 编译选项
 !msvc {
