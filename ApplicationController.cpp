@@ -5,6 +5,7 @@
 #include "PlotWindowManager.h"
 #include "DataProcessor.h"
 #include "AppConfig.h"
+#include "MainWindow.h"
 #include <QThread>
 #include <QMetaObject>
 #include <QApplication>
@@ -65,6 +66,12 @@ bool ApplicationController::initialize()
     // 再初始化默认绘图窗口（向后兼容）
     if (!initDefaultPlotWindow()) {
         qCritical() << "初始化默认绘图窗口失败";
+        return false;
+    }
+    
+    // 初始化主界面窗口
+    if (!initMainWindow()) {
+        qCritical() << "初始化主界面窗口失败";
         return false;
     }
     
@@ -224,6 +231,28 @@ bool ApplicationController::initDefaultPlotWindow()
     return true;
 }
 
+bool ApplicationController::initMainWindow()
+{
+    // 创建主界面窗口
+    m_mainWindow.reset(new MainWindow(this));
+    if (!m_mainWindow) {
+        qCritical() << "创建主界面窗口失败";
+        return false;
+    }
+    
+    // 设置窗口标题
+    m_mainWindow->setWindowTitle(QString("实时数据监控 v1.0"));
+    
+    // 初始化主窗口界面
+    m_mainWindow->initialize();
+    
+    // 显示主窗口
+    m_mainWindow->show();
+    
+    qInfo() << "主界面窗口已初始化并显示";
+    return true;
+}
+
 PlotWindowManager* ApplicationController::plotWindowManager() const
 {
     return m_plotWindowManager;
@@ -256,6 +285,9 @@ void ApplicationController::cleanup()
     
     // 销毁绘图窗口
     m_plotWindow.reset();
+    
+    // 销毁主界面窗口
+    m_mainWindow.reset();
     
     // 销毁串口接收器
     m_serialReceiver.reset();

@@ -4,6 +4,7 @@
 #include <QDebug>
 #include <QRandomGenerator>
 #include <QTimer>
+#include <QRegularExpression>
 #include <cstring>
 
 SerialReceiver::SerialReceiver(QObject *parent) : QObject(parent)
@@ -147,4 +148,88 @@ FrameData SerialReceiver::parseRawData(const QByteArray& rawFrame)
         frame.isAlarm = (rawFrame[15] & 0x01) == 1;
     }
     return frame;
+}
+
+void SerialReceiver::sendCommand(const QByteArray& command)
+{
+    if (!m_serialPort->isOpen()) {
+        emit commandError("串口未打开，无法发送指令");
+        qWarning() << "尝试发送指令时串口未打开";
+        return;
+    }
+    
+    if (command.isEmpty()) {
+        emit commandError("指令不能为空");
+        qWarning() << "尝试发送空指令";
+        return;
+    }
+    
+    qint64 bytesWritten = m_serialPort->write(command);
+    if (bytesWritten == -1) {
+        QString error = QString("指令发送失败: %1").arg(m_serialPort->errorString());
+        emit commandError(error);
+        qCritical() << error;
+    } else {
+        if (bytesWritten != command.size()) {
+            qWarning() << QString("指令发送不完全: 期望%1字节，实际%2字节")
+                          .arg(command.size()).arg(bytesWritten);
+        }
+        emit commandSent(command);
+        qInfo() << QString("指令发送成功: %1字节").arg(bytesWritten);
+    }
+}
+
+void SerialReceiver::sendCommand(const QString& command, bool isHex)
+{
+    if (command.isEmpty()) {
+        emit commandError("指令不能为空");
+        qWarning() << "尝试发送空指令";
+        return;
+    }
+    
+    QByteArray byteArray;
+    if (isHex) {
+        byteArray = hexStringToByteArray(command);
+        if (byteArray.isEmpty()) {
+            emit commandError("十六进制格式无效");
+            qWarning() << "无效的十六进制格式:" << command;
+            return;
+        }
+    } else {
+        byteArray = command.toUtf8();
+    }
+    
+    sendCommand(byteArray);
+}
+
+void SerialReceiver::sendHexCommand(const QString& hexCommand)
+{
+    sendCommand(hexCommand, true);
+}
+
+QByteArray SerialReceiver::hexStringToByteArray(const QString& hex)
+{
+    QByteArray byteArray;
+    QString cleanedHex = hex.trimmed();
+    
+    // 移除可能的前缀和后缀
+    cleanedHex.remove(QRegularExpression("^0x|^0X"));
+    cleanedHex.remove(QRegularExpression("[^0-9A-Fa-f]"));
+    
+    if (cleanedHex.isEmpty() || cleanedHex.length() % 2 != 0) {
+        qWarning() << "无效的十六进制字符串:" << hex;
+        return QByteArray();
+    }
+    
+    bool ok;
+    for (int i = 0; i < cleanedHex.length(); i += 2) {
+        QString byteString = cleanedHex.mid(i, 2);
+        byteArray.append(static_cast<char>(byteString.toInt(&ok, 16)));
+        if (!ok) {
+            qWarning() << "无效的十六进制字节:" << byteString;
+            return QByteArray();
+        }
+    }
+    
+    return byteArray;
 }

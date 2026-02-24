@@ -9,6 +9,7 @@
 
 // 前置声明
 class PlotWindow;
+class QMdiArea;
 
 /**
  * @brief 绘图窗口管理器（单例模式）
@@ -47,6 +48,14 @@ public:
      * @return 创建的PlotWindow指针
      */
     PlotWindow* createWindow(PlotType type = CombinedPlot, QWidget* parent = nullptr);
+    
+    /**
+     * @brief 在MDI区域中创建窗口
+     * @param mdiArea MDI区域
+     * @param type 窗口类型
+     * @return 创建的PlotWindow指针
+     */
+    PlotWindow* createWindowInMdiArea(QMdiArea* mdiArea, PlotType type = CombinedPlot);
 
     /**
      * @brief 注册绘图窗口（用于手动创建的窗口）

@@ -3,6 +3,7 @@
 #include <QFile>
 #include <QDebug>
 #include <QApplication>
+#include <QSerialPort>
 
 AppConfig* AppConfig::m_instance = nullptr;
 

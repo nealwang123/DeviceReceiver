@@ -11,6 +11,7 @@ class PlotWindow;
 class DataProcessor;
 class AppConfig;
 class PlotWindowManager;
+class MainWindow;
 class QThread;
 
 /**
@@ -115,6 +116,12 @@ private:
     bool initDefaultPlotWindow();
     
     /**
+     * @brief 初始化主界面窗口
+     * @return 初始化是否成功
+     */
+    bool initMainWindow();
+    
+    /**
      * @brief 清理所有资源
      */
     void cleanup();
@@ -129,6 +136,7 @@ private:
     QScopedPointer<PlotWindow> m_plotWindow;  // 向后兼容的默认窗口
     QScopedPointer<DataProcessor> m_dataProcessor;
     PlotWindowManager* m_plotWindowManager = nullptr;  // 绘图窗口管理器
+    QScopedPointer<MainWindow> m_mainWindow;  // 主界面窗口
     
     // 配置参数（后续可迁移到AppConfig类）
     struct {

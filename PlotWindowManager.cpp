@@ -1,6 +1,9 @@
 ﻿#include "PlotWindowManager.h"
 #include "PlotWindow.h"
 #include "DataCacheManager.h"
+#include <QMdiArea>
+#include <QMdiSubWindow>
+#include <QPointer>
 #include <QDebug>
 
 // 静态成员初始化
@@ -112,6 +115,47 @@ PlotWindow* PlotWindowManager::createWindow(PlotType type, QWidget* parent)
     registerWindow(window);
     
     return window;
+}
+
+PlotWindow* PlotWindowManager::createWindowInMdiArea(QMdiArea* mdiArea, PlotType type)
+{
+    if (!mdiArea) {
+        qCritical() << "MDI区域无效";
+        return nullptr;
+    }
+    
+    // 创建PlotWindow实例（父对象为null，将由QMdiSubWindow管理）
+    PlotWindow* plotWindow = createWindow(type);
+    if (!plotWindow) {
+        return nullptr;
+    }
+    
+    // 创建MDI子窗口
+    QMdiSubWindow* subWindow = mdiArea->addSubWindow(plotWindow);
+    if (!subWindow) {
+        qCritical() << "创建MDI子窗口失败";
+        delete plotWindow;
+        return nullptr;
+    }
+    
+    // 配置子窗口属性
+    subWindow->setAttribute(Qt::WA_DeleteOnClose);
+    subWindow->setWindowTitle(plotWindow->windowTitle());
+    subWindow->resize(600, 400);
+    subWindow->show();
+    
+    // 当子窗口关闭时，从管理器注销PlotWindow
+    // 使用QPointer安全地跟踪PlotWindow
+    QPointer<PlotWindow> plotWindowPtr(plotWindow);
+    connect(subWindow, &QMdiSubWindow::destroyed, this, [this, plotWindowPtr]() {
+        if (plotWindowPtr) {
+            unregisterWindow(plotWindowPtr);
+        }
+    });
+    
+    qInfo() << "在MDI区域创建窗口:" << plotWindow->windowTitle();
+    
+    return plotWindow;
 }
 
 void PlotWindowManager::registerWindow(PlotWindow* window)
