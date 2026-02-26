@@ -34,10 +34,7 @@ void DataCacheManager::addFrame(const FrameData& frame)
     // 发送轻量更新通知
     emit dataUpdated();
 
-    // 检测报警帧
-    if (frame.isAlarm || frame.temperature > 80) {
-        emit criticalFrameReceived(frame);
-    }
+    // 报警功能已移除
 }
 
 FrameData DataCacheManager::getLatestFrame()

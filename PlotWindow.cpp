@@ -78,15 +78,7 @@ PlotWindow::~PlotWindow()
 
 void PlotWindow::initPlot()
 {
-    // 添加温度/湿度曲线
-    m_plot->addGraph();
-    m_plot->graph(0)->setPen(QPen(Qt::red, 2));
-    m_plot->graph(0)->setName("温度(℃)");
-
-    m_plot->addGraph();
-    m_plot->graph(1)->setPen(QPen(Qt::blue, 2));
-    m_plot->graph(1)->setName("湿度(%RH)");
-
+    // 不再添加温度/湿度曲线，留空等待多通道数据
     // 坐标轴配置
     m_plot->xAxis->setLabel("时间(ms)");
     m_plot->yAxis->setLabel("数值");
@@ -140,12 +132,10 @@ void PlotWindow::updatePlotData(const QVector<FrameData>& frames)
                  << "mode" << frame.detectMode << "count" << frame.channelCount;
         idx++;
         if (frame.detectMode == FrameData::Legacy) {
-            // legacy 行为：温度/湿度
+            // legacy 行为：不再支持
             if (m_viewTypeCombo) m_viewTypeCombo->setVisible(false);
-            m_xTime.append(frame.timestamp);
-            m_yTemp.append(frame.temperature);
-            m_yHumidity.append(frame.humidity);
-            qDebug() << "legacy append done";
+            // 忽略legacy数据
+            qDebug() << "legacy mode ignored";
         } else if (frame.detectMode == FrameData::MultiChannelReal) {
             // 如果之前是 complex 模式，需要恢复简单布局
             if (m_lastMode == FrameData::MultiChannelComplex) {
@@ -162,8 +152,6 @@ void PlotWindow::updatePlotData(const QVector<FrameData>& frames)
                 // reset channel state since layout changed
                 m_currentChannelCount = 0;
                 m_xTime.clear();
-                m_yTemp.clear();
-                m_yHumidity.clear();
                 m_channelData.clear();
                 m_channelData2.clear();
                 if (m_viewTypeCombo) m_viewTypeCombo->setVisible(false);
@@ -182,8 +170,6 @@ void PlotWindow::updatePlotData(const QVector<FrameData>& frames)
                 m_currentChannelCount = ch;
                 // 清空现有数据，因为通道数改变了
                 m_xTime.clear();
-                m_yTemp.clear();
-                m_yHumidity.clear();
                 m_channelData.clear();
                 m_channelData.resize(ch);
                 m_plot->clearGraphs();
@@ -212,8 +198,6 @@ void PlotWindow::updatePlotData(const QVector<FrameData>& frames)
             if (m_lastMode != frame.detectMode || m_currentChannelCount != ch) {
                 // 清空现有数据，因为模式改变了
                 m_xTime.clear();
-                m_yTemp.clear();
-                m_yHumidity.clear();
                 m_currentChannelCount = ch;
                 setupComplexLayout(ch);
                 if (m_viewTypeCombo) m_viewTypeCombo->setVisible(true);
@@ -253,12 +237,10 @@ void PlotWindow::updatePlotData(const QVector<FrameData>& frames)
     }
     qDebug() << "updatePlotData finished, lastMode=" << m_lastMode;
 
-    // 限制最大点数，避免卡顿（对通道数据与 legacy 数据分别处理）
+    // 限制最大点数，避免卡顿
     if (m_xTime.size() > MAX_PLOT_POINTS) {
         int removeCount = m_xTime.size() - MAX_PLOT_POINTS;
         m_xTime.remove(0, removeCount);
-        if (!m_yTemp.isEmpty()) m_yTemp.remove(0, removeCount);
-        if (!m_yHumidity.isEmpty()) m_yHumidity.remove(0, removeCount);
         for (auto &vec : m_channelData) {
             if (vec.size() > removeCount)
                 vec.remove(0, removeCount);
@@ -290,15 +272,11 @@ void PlotWindow::updatePlotData(const QVector<FrameData>& frames)
                 m_plot->graph(i)->setData(m_xTime, m_channelData.at(i));
         }
     } else {
-        // legacy 回退
-        if (m_plot->graphCount() < 2) {
-            // 保证至少有两个曲线用于 legacy
-            m_plot->clearGraphs();
-            m_plot->addGraph(); m_plot->graph(0)->setPen(QPen(Qt::red, 2)); m_plot->graph(0)->setName("温度(℃)");
-            m_plot->addGraph(); m_plot->graph(1)->setPen(QPen(Qt::blue, 2)); m_plot->graph(1)->setName("湿度(%RH)");
+        // 如果没有数据，显示空图
+        if (m_plot->graphCount() == 0) {
+            // 至少有一个空图
+            m_plot->addGraph();
         }
-        m_plot->graph(0)->setData(m_xTime, m_yTemp);
-        m_plot->graph(1)->setData(m_xTime, m_yHumidity);
     }
 
     // 自动调整X轴（显示最近10秒）
@@ -502,5 +480,14 @@ void PlotWindow::onCriticalFrame(const FrameData& frame)
     });
 
     // 打印报警日志
-    qCritical() << QString("【报警】帧%1：温度%2℃ 超过阈值！").arg(frame.frameId).arg(frame.temperature, 0, 'f', 1);
+    QString alarmMsg;
+    if (frame.detectMode == FrameData::MultiChannelReal) {
+        alarmMsg = QString("【报警】帧%1：实数模式 通道数%2").arg(frame.frameId).arg(frame.channelCount);
+    } else if (frame.detectMode == FrameData::MultiChannelComplex) {
+        alarmMsg = QString("【报警】帧%1：复数模式 通道数%2").arg(frame.frameId).arg(frame.channelCount);
+    } else {
+        alarmMsg = QString("【报警】帧%1：Legacy模式（已弃用）").arg(frame.frameId);
+    }
+    
+    qCritical() << alarmMsg;
 }

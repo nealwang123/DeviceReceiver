@@ -374,7 +374,7 @@ void MainWindow::initUI()
         QFormLayout* createLayout = new QFormLayout(createGroup);
         
         m_windowTypeCombo = new QComboBox();
-        m_windowTypeCombo->addItems({"组合图", "温度图", "湿度图", "电压图", "历史图", "热力图", "阵列图"});
+        m_windowTypeCombo->addItems({"组合图",  "历史图", "热力图", "阵列图"});
         m_createWindowButton = new QPushButton("新建窗口");
         
         createLayout->addRow("窗口类型:", m_windowTypeCombo);
@@ -778,12 +778,9 @@ void MainWindow::onCreateWindowClicked()
     
     switch (typeIndex) {
     case 0: type = PlotWindowManager::CombinedPlot; break;
-    case 1: type = PlotWindowManager::TemperaturePlot; break;
-    case 2: type = PlotWindowManager::HumidityPlot; break;
-    case 3: type = PlotWindowManager::VoltagePlot; break;
-    case 4: type = PlotWindowManager::HistoryPlot; break;
-    case 5: type = PlotWindowManager::HeatmapPlot; break;
-    case 6: type = PlotWindowManager::ArrayPlot; break;
+    case 1: type = PlotWindowManager::HistoryPlot; break;
+    case 2: type = PlotWindowManager::HeatmapPlot; break;
+    case 3: type = PlotWindowManager::ArrayPlot; break;
     }
     
     qDebug() << "[MainWindow] creating window type" << type;

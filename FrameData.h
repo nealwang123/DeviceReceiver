@@ -8,13 +8,9 @@
 // 实时数据帧结构体（与硬件协议对应）
 struct FrameData
 {
-    // 基本字段（legacy 兼容）
+    // 基本字段
     int64_t timestamp;     // 时间戳（毫秒）
     uint16_t frameId;      // 帧ID（0-65535）
-    float temperature;     // 温度（℃）
-    float humidity;        // 湿度（%）
-    double voltage;        // 电压（V）
-    bool isAlarm;          // 报警标志
 
     // 检测模式：用于区分 legacy / 多通道实数 / 多通道复数
     enum DetectionMode : uint8_t {
@@ -34,10 +30,6 @@ struct FrameData
     FrameData() :
         timestamp(0),
         frameId(0),
-        temperature(0.0f),
-        humidity(0.0f),
-        voltage(0.0),
-        isAlarm(false),
         detectMode(Legacy),
         channelCount(0),
         channels_comp0(),

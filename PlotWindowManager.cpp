@@ -85,35 +85,35 @@ PlotWindow* PlotWindowManager::createWindow(PlotType type, QWidget* parent)
     switch (type) {
     case CombinedPlot:
         window = new PlotWindow(parent);
-        title = "温湿度监控";
+        title = "组合监控";
         break;
     case TemperaturePlot:
         window = new PlotWindow(parent);
-        title = "温度监控";
+        title = "监控1";
         break;
     case HumidityPlot:
         window = new PlotWindow(parent);
-        title = "湿度监控";
+        title = "监控2";
         break;
     case VoltagePlot:
         window = new PlotWindow(parent);
-        title = "电压监控";
+        title = "监控3";
         break;
     case HistoryPlot:
         window = new PlotWindow(parent);
-        title = "历史数据";
+        title = "历史数据4";
         break;
     case HeatmapPlot:
         window = new HeatMapPlotWindow(parent);
-        title = "热力图";
+        title = "热力图5";
         break;
     case ArrayPlot:
         window = new ArrayPlotWindow(parent);
-        title = "阵列图";
+        title = "阵列图6";
         break;
     default:
         window = new PlotWindow(parent);
-        title = "温湿度监控";
+        title = "未知监控";
         break;
     }
 

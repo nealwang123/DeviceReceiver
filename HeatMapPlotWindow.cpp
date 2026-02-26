@@ -352,7 +352,7 @@ void HeatMapPlotWindow::applyGrid(const QVector<double>& values, int width, int 
 void HeatMapPlotWindow::updateFromFrame(const FrameData& frame)
 {
     // 占位：未来实现如何从 FrameData 更新热力图
-    // 例如：将温度或其他字段映射到网格的某个位置
+    // 例如：将通道数据映射到热力图网格
     Q_UNUSED(frame);
 }
 
@@ -437,8 +437,20 @@ void HeatMapPlotWindow::onDataUpdated(const QVector<FrameData>& frames)
 
 void HeatMapPlotWindow::onCriticalFrame(const FrameData& frame)
 {
-    m_statsLabel->setText(QString("报警！温度: %1°C, 湿度: %2%")
-                         .arg(frame.temperature, 0, 'f', 1)
-                         .arg(frame.humidity, 0, 'f', 1));
+    QString alarmMsg;
+    if (frame.detectMode == FrameData::MultiChannelReal) {
+        alarmMsg = QString("报警！帧ID:%1 实数模式 通道数:%2")
+            .arg(frame.frameId)
+            .arg(frame.channelCount);
+    } else if (frame.detectMode == FrameData::MultiChannelComplex) {
+        alarmMsg = QString("报警！帧ID:%1 复数模式 通道数:%2")
+            .arg(frame.frameId)
+            .arg(frame.channelCount);
+    } else {
+        alarmMsg = QString("报警！帧ID:%1 Legacy模式（已弃用）")
+            .arg(frame.frameId);
+    }
+    
+    m_statsLabel->setText(alarmMsg);
 }
 

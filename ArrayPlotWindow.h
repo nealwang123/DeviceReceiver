@@ -27,20 +27,19 @@ private:
 
 private:
     QCustomPlot* m_plot{nullptr};
-    QCPAxisRect* m_axisRectTemp{nullptr};
-    QCPAxisRect* m_axisRectHumid{nullptr};
-    QCPAxisRect* m_axisRectVolt{nullptr};
+    QVector<QCPAxisRect*> m_channelAxisRects;  // 通道轴矩形
     QLabel* m_statsLabel{nullptr};
     QTimer* m_mockDataTimer{nullptr};
     
     QVector<double> m_timeAxis;           // 共享时间轴
-    QVector<double> m_temperatureValues;
-    QVector<double> m_humidityValues;
-    QVector<double> m_voltageValues;
+    QVector<QVector<double>> m_channelValues; // 每通道数据
+    QVector<QVector<double>> m_channelValues2; // 复杂模式的第二分量
     
     int m_maxDataPoints{100};
     bool m_useMockData{false};
     qint64 m_frameCount{0};
+    int m_currentChannelCount{0};
+    FrameData::DetectionMode m_lastMode{FrameData::Legacy};
 };
 
 #endif // ARRAYPLOTWINDOW_H

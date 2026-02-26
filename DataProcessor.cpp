@@ -26,44 +26,46 @@ void DataProcessor::calcStats()
 
     // 计算统计值
     int frameCount = frames.size();
-    double tempSum = 0, tempMax = 0, tempMin = 100;
-    double humiSum = 0, humiMax = 0, humiMin = 100;
+    double channelSum = 0, channelMax = -1e9, channelMin = 1e9;
+    int validChannelCount = 0;
 
     for (const auto& frame : frames) {
         // 根据模式决定统计数值
-        double tempVal = 0.0;
-        double humVal = 0.0;
+        double channelVal = 0.0;
         if (frame.detectMode == FrameData::Legacy) {
-            tempVal = frame.temperature;
-            humVal = frame.humidity;
+            // Legacy模式不再支持，跳过统计
+            continue;
         } else if (frame.detectMode == FrameData::MultiChannelReal) {
-            // 使用第一个通道值作为温度统计，湿度留空
-            if (!frame.channels_comp0.isEmpty()) tempVal = frame.channels_comp0.first();
+            // 使用第一个通道值统计
+            if (!frame.channels_comp0.isEmpty()) {
+                channelVal = frame.channels_comp0.first();
+                validChannelCount++;
+            }
         } else if (frame.detectMode == FrameData::MultiChannelComplex) {
             // 复数模式用第一个通道幅值
             if (!frame.channels_comp0.isEmpty()) {
                 double re = frame.channels_comp0.first();
                 double im = frame.channels_comp1.isEmpty() ? 0.0 : frame.channels_comp1.first();
-                tempVal = std::hypot(re, im);
+                channelVal = std::hypot(re, im);
+                validChannelCount++;
             }
         }
 
-        tempSum += tempVal;
-        tempMax = std::max(tempMax, tempVal);
-        tempMin = std::min(tempMin, tempVal);
+        channelSum += channelVal;
+        channelMax = std::max(channelMax, channelVal);
+        channelMin = std::min(channelMin, channelVal);
+    }
 
-        humiSum += humVal;
-        humiMax = std::max(humiMax, humVal);
-        humiMin = std::min(humiMin, humVal);
+    if (validChannelCount == 0) {
+        qInfo() << QString("【1秒统计】帧数：%1 | 无有效通道数据")
+                    .arg(frameCount);
+        return;
     }
 
     // 输出统计结果
-    qInfo() << QString("【1秒统计】帧数：%1 | 温度：平均%2(最大%3/最小%4) | 湿度：平均%5(最大%6/最小%7)")
+    qInfo() << QString("【1秒统计】帧数：%1 | 通道值：平均%2(最大%3/最小%4)")
                 .arg(frameCount)
-                .arg(tempSum/frameCount, 0, 'f', 1)
-                .arg(tempMax, 0, 'f', 1)
-                .arg(tempMin, 0, 'f', 1)
-                .arg(humiSum/frameCount, 0, 'f', 1)
-                .arg(humiMax, 0, 'f', 1)
-                .arg(humiMin, 0, 'f', 1);
+                .arg(channelSum/validChannelCount, 0, 'f', 1)
+                .arg(channelMax, 0, 'f', 1)
+                .arg(channelMin, 0, 'f', 1);
 }

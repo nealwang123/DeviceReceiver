@@ -46,9 +46,7 @@ private:
     
     // 本地绘图缓存
     QVector<double> m_xTime;        // 时间轴
-    // 兼容 legacy（温度/湿度）或 多通道数据缓存
-    QVector<double> m_yTemp;        // 温度数据（legacy）
-    QVector<double> m_yHumidity;    // 湿度数据（legacy）
+    // 多通道数据缓存
     QVector<QVector<double>> m_channelData; // 每通道的 y 数据（多通道模式）
     QVector<QVector<double>> m_channelData2; // 复杂模式底部图的数据
     int m_currentChannelCount = 0;

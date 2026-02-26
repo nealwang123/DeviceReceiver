@@ -79,10 +79,6 @@ void SerialReceiver::onMockDataTimer()
     FrameData frame;
     frame.timestamp = QDateTime::currentMSecsSinceEpoch();
     frame.frameId = QRandomGenerator::global()->bounded(10000);
-    frame.temperature = 20 + QRandomGenerator::global()->bounded(60.0); // 20-80℃
-    frame.humidity = 30 + QRandomGenerator::global()->bounded(50.0);   // 30-80%
-    frame.voltage = 3.0 + QRandomGenerator::global()->bounded(1.5);    // 3.0-4.5V
-    frame.isAlarm = (frame.temperature > 75); // 模拟报警
 
     // 模拟单个多通道信号（用于开发），周期性切换实数/复数
     const int MOCK_CHANNEL_COUNT = 8;
@@ -114,12 +110,11 @@ void SerialReceiver::onMockDataTimer()
     // 写入缓存
     DataCacheManager::instance()->addFrame(frame);
 
-    qDebug() << QString("模拟帧[%1]：温度=%2℃ 湿度=%3% 电压=%4V 报警=%5")
+    // 更新日志格式，只显示通道信息
+    qDebug() << QString("模拟帧[%1]：模式=%2 通道数=%3")
                 .arg(frame.frameId)
-                .arg(frame.temperature, 0, 'f', 1)
-                .arg(frame.humidity, 0, 'f', 1)
-                .arg(frame.voltage, 0, 'f', 1)
-                .arg(frame.isAlarm ? "是" : "否");
+                .arg(frame.detectMode == FrameData::MultiChannelReal ? "实部" : "复数")
+                .arg(frame.channelCount);
 }
 
 void SerialReceiver::processSerialBuffer()
@@ -145,12 +140,10 @@ void SerialReceiver::processSerialBuffer()
         frame.timestamp = QDateTime::currentMSecsSinceEpoch();
         DataCacheManager::instance()->addFrame(frame);
 
-        qDebug() << QString("解析帧[%1]：温度=%2℃ 湿度=%3% 电压=%4V 报警=%5")
+        qDebug() << QString("解析帧[%1]：模式=%2 通道数=%3")
                     .arg(frame.frameId)
-                    .arg(frame.temperature, 0, 'f', 1)
-                    .arg(frame.humidity, 0, 'f', 1)
-                    .arg(frame.voltage, 0, 'f', 1)
-                    .arg(frame.isAlarm ? "是" : "否");
+                    .arg(frame.detectMode == FrameData::MultiChannelReal ? "实数" : (frame.detectMode == FrameData::MultiChannelComplex ? "复数" : "Legacy"))
+                    .arg(frame.channelCount);
     }
 }
 
@@ -176,19 +169,14 @@ FrameData SerialReceiver::parseRawData(const QByteArray& rawFrame)
     ds >> head; // 读取并丢弃帧头
 
     quint16 frameId = 0;
-    float temperature = 0.0f;
-    float humidity = 0.0f;
-    float voltage = 0.0f;
-
+    // 跳过旧的温度、湿度、电压字段（各4字节，共12字节）
+    float dummy = 0.0f;
     ds >> frameId;
-    ds >> temperature;
-    ds >> humidity;
-    ds >> voltage;
+    ds >> dummy; // temperature
+    ds >> dummy; // humidity
+    ds >> dummy; // voltage
 
     frame.frameId = static_cast<uint32_t>(frameId);
-    frame.temperature = temperature;
-    frame.humidity = humidity;
-    frame.voltage = voltage;
 
     // 如果帧长度超出基础16字节，尝试读取扩展字段：mode/count及通道数据
     if (rawFrame.size() >= 18) { // 至少要有 mode 和 count
@@ -223,16 +211,7 @@ FrameData SerialReceiver::parseRawData(const QByteArray& rawFrame)
         }
     }
 
-    // 报警：若协议在最后字节具有标志位则使用该位，否则依据温度阈值进行判断
-    bool flagAlarm = false;
-    if (rawFrame.size() >= 16) {
-        quint8 lastByte = static_cast<quint8>(rawFrame.at(15));
-        flagAlarm = (lastByte & 0x01) == 0x01;
-    }
-
-    // 温度阈值使用默认值（如需从配置读取，可在此处扩展）
-    const float temperatureThreshold = 80.0f;
-    frame.isAlarm = flagAlarm || (frame.temperature > temperatureThreshold);
+    // 报警功能已移除
 
     return frame;
 }
