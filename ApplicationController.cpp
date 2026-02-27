@@ -92,6 +92,12 @@ void ApplicationController::start()
         return;
     }
     
+#ifdef QT_COMPILE_FOR_WASM
+    // WebAssembly环境下强制使用模拟数据，因为没有真实串口
+    m_config.useMockData = true;
+    qInfo() << "WebAssembly环境：强制使用模拟数据";
+#endif
+    
     // 确保串口线程在运行状态
     if (m_serialThread && !m_serialThread->isRunning()) {
         qInfo() << "串口线程未运行，重新启动线程";

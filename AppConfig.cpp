@@ -3,7 +3,9 @@
 #include <QFile>
 #include <QDebug>
 #include <QApplication>
+#ifndef QT_COMPILE_FOR_WASM
 #include <QSerialPort>
+#endif
 
 AppConfig* AppConfig::m_instance = nullptr;
 

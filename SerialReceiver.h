@@ -1,9 +1,16 @@
 ﻿#ifndef SERIALRECEIVER_H
 #define SERIALRECEIVER_H
-
+// SerialReceiver.h 第一行添加
+#ifdef QT_COMPILE_FOR_WASM
+#define max_align_t __qt_wasm_max_align_t  // 重命名冲突类型
+#endif
 #include <QObject>
+// 仅在非wasm环境下包含串口头文件
+#ifndef QT_COMPILE_FOR_WASM
 #include <QSerialPort>
+#endif
 #include <QByteArray>
+#include <QTimer>
 #include "FrameData.h"
 
 // 串口数据接收线程类（独立线程运行，避免阻塞UI）
@@ -81,7 +88,9 @@ private:
     QByteArray hexStringToByteArray(const QString& hex);
 
 private:
-    QSerialPort* m_serialPort;
+    #ifndef QT_COMPILE_FOR_WASM
+        QSerialPort* m_serialPort;
+    #endif
     QByteArray m_serialBuffer;   // 串口缓存（处理粘包）
     QTimer* m_mockTimer;         // 模拟数据定时器
 

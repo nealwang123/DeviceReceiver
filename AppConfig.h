@@ -4,7 +4,9 @@
 #include <QString>
 #include <QObject>
 #include <QSize>
+#ifndef QT_COMPILE_FOR_WASM
 #include <QSerialPort>
+#endif
 
 /**
  * @brief 应用配置管理类，集中管理所有配置参数
@@ -48,7 +50,8 @@ public:
     int mockDataIntervalMs() const { return m_mockDataIntervalMs; }
     void setMockDataIntervalMs(int ms) { m_mockDataIntervalMs = ms; }
     
-    // ========== 串口高级配置 ==========
+#ifndef QT_COMPILE_FOR_WASM
+    // ========== 串口高级配置（仅在非WASM环境下可用）==========
     QSerialPort::DataBits dataBits() const { return m_dataBits; }
     void setDataBits(QSerialPort::DataBits bits) { m_dataBits = bits; }
     
@@ -60,6 +63,7 @@ public:
     
     QSerialPort::FlowControl flowControl() const { return m_flowControl; }
     void setFlowControl(QSerialPort::FlowControl flow) { m_flowControl = flow; }
+#endif
     
     // ========== 绘图配置 ==========
     int maxPlotPoints() const { return m_maxPlotPoints; }
@@ -153,11 +157,13 @@ private:
     bool m_useMockData = true;         // 是否使用模拟数据
     int m_mockDataIntervalMs = 100;    // 模拟数据间隔（毫秒）
     
-    // 串口高级配置
+#ifndef QT_COMPILE_FOR_WASM
+    // 串口高级配置（仅在非WASM环境下可用）
     QSerialPort::DataBits m_dataBits = QSerialPort::Data8;
     QSerialPort::StopBits m_stopBits = QSerialPort::OneStop;
     QSerialPort::Parity m_parity = QSerialPort::NoParity;
     QSerialPort::FlowControl m_flowControl = QSerialPort::NoFlowControl;
+#endif
     
     // 绘图配置
     int m_maxPlotPoints = 200;         // 最大绘图点数

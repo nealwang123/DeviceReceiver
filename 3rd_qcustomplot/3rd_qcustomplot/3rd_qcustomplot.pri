@@ -2,14 +2,15 @@ greaterThan(QT_MAJOR_VERSION, 4): QT += printsupport
 greaterThan(QT_MAJOR_VERSION, 4): CONFIG += c++11
 #lessThan(QT_MAJOR_VERSION, 5): QMAKE_CXXFLAGS += -std=c++11
 
-#下面用于开启opengl
-QT +=opengl
-DEFINES += QCUSTOMPLOT_USE_OPENGL
-#DEFINES += QCUSTOMPLOT_USE_OPENGL
-LIBS += -lopengl32 -lglu32
-#依赖freeglut库以及头文件
-INCLUDEPATH += $$PWD/freeglut/include
-LIBS += -L$$PWD/freeglut/lib/x64  -lfreeglut
+#下面用于开启opengl（WASM环境下禁用原生OpenGL，使用Emscripten自带WebGL）
+!wasm {
+    QT += opengl
+    DEFINES += QCUSTOMPLOT_USE_OPENGL
+    LIBS += -lopengl32 -lglu32
+    #依赖freeglut库以及头文件
+    INCLUDEPATH += $$PWD/freeglut/include
+    LIBS += -L$$PWD/freeglut/lib/x64  -lfreeglut
+}
 
 DEFINES += qcustomplot_v2_1
 #将当前目录加入到头文件路径

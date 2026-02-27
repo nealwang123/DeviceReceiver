@@ -6,6 +6,8 @@
 #include <QFile>
 #include <QTextStream>
 #include <QDateTime>
+#include <QFontDatabase>
+#include <QFont>
 #include <iostream>
 
 static QFile* g_logFile = nullptr;
@@ -38,6 +40,23 @@ int main(int argc, char *argv[])
         
         // 注册FrameData类型用于跨线程信号槽
         qRegisterMetaType<FrameData>("FrameData");
+
+#ifdef QT_COMPILE_FOR_WASM
+        // WASM环境没有系统字体，需要手动加载中文字体
+        {
+            int fontId = QFontDatabase::addApplicationFont(":/fonts/files/fonts/simhei.ttf");
+            if (fontId != -1) {
+                QStringList families = QFontDatabase::applicationFontFamilies(fontId);
+                if (!families.isEmpty()) {
+                    QFont defaultFont(families.first(), 9);
+                    QApplication::setFont(defaultFont);
+                    qDebug() << "WASM: 已加载中文字体:" << families.first();
+                }
+            } else {
+                qWarning() << "WASM: 加载中文字体失败";
+            }
+        }
+#endif
 
         // 加载配置文件（不存在或格式错误时回退到默认配置）
         qDebug() << "正在加载配置文件...";

@@ -11,11 +11,15 @@
 
 SerialReceiver::SerialReceiver(QObject *parent) : QObject(parent)
 {
+#ifndef QT_COMPILE_FOR_WASM
     m_serialPort = new QSerialPort(this);
+#endif
     m_mockTimer = new QTimer(this);
 
+#ifndef QT_COMPILE_FOR_WASM
     // 连接串口信号
     connect(m_serialPort, &QSerialPort::readyRead, this, &SerialReceiver::onSerialReadyRead);
+#endif
     // 连接模拟数据定时器
     connect(m_mockTimer, &QTimer::timeout, this, &SerialReceiver::onMockDataTimer);
 }
@@ -28,6 +32,7 @@ SerialReceiver::~SerialReceiver()
 
 bool SerialReceiver::openSerial(const QString& portName, int baudRate)
 {
+#ifndef QT_COMPILE_FOR_WASM
     m_serialPort->setPortName(portName);
     m_serialPort->setBaudRate(baudRate);
     m_serialPort->setDataBits(QSerialPort::Data8);
@@ -45,19 +50,32 @@ bool SerialReceiver::openSerial(const QString& portName, int baudRate)
         emit commandError(err);
         return false;
     }
+#else
+    qInfo() << QString("WebAssembly环境：模拟打开串口[%1]，波特率：%2").arg(portName).arg(baudRate);
+    return true;
+#endif
 }
 
 void SerialReceiver::closeSerial()
 {
+#ifndef QT_COMPILE_FOR_WASM
     if (m_serialPort->isOpen()) {
         m_serialPort->close();
         qInfo() << "串口已关闭";
     }
+#else
+    qInfo() << "WebAssembly环境：模拟关闭串口";
+#endif
 }
 
 bool SerialReceiver::isSerialOpen() const
 {
+#ifndef QT_COMPILE_FOR_WASM
     return m_serialPort->isOpen();
+#else
+    // WebAssembly环境下总是返回false，因为没有真实的串口连接
+    return false;
+#endif
 }
 
 void SerialReceiver::startMockData(int intervalMs)
@@ -69,8 +87,13 @@ void SerialReceiver::startMockData(int intervalMs)
 
 void SerialReceiver::onSerialReadyRead()
 {
+#ifndef QT_COMPILE_FOR_WASM
     m_serialBuffer.append(m_serialPort->readAll());
     processSerialBuffer();
+#else
+    // WebAssembly环境下无真实串口数据
+    qDebug() << "WebAssembly环境：模拟串口数据接收";
+#endif
 }
 
 void SerialReceiver::onMockDataTimer()
@@ -223,6 +246,7 @@ FrameData SerialReceiver::parseRawFrameForTest(const QByteArray& rawFrame)
 
 void SerialReceiver::sendCommand(const QByteArray& command)
 {
+#ifndef QT_COMPILE_FOR_WASM
     if (!m_serialPort->isOpen()) {
         emit commandError("串口未打开，无法发送指令");
         qWarning() << "尝试发送指令时串口未打开";
@@ -248,6 +272,17 @@ void SerialReceiver::sendCommand(const QByteArray& command)
         emit commandSent(command);
         qInfo() << QString("指令发送成功: %1字节").arg(bytesWritten);
     }
+#else
+    // WebAssembly环境下模拟发送指令
+    if (command.isEmpty()) {
+        emit commandError("指令不能为空");
+        qWarning() << "尝试发送空指令";
+        return;
+    }
+    
+    qInfo() << QString("WebAssembly环境：模拟发送指令，长度: %1字节").arg(command.size());
+    emit commandSent(command);
+#endif
 }
 
 void SerialReceiver::sendCommand(const QString& command, bool isHex)

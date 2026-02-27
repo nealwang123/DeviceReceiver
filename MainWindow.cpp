@@ -6,7 +6,6 @@
 #include "SerialReceiver.h"
 #include "DataCacheManager.h"
 
-#include <QSerialPortInfo>
 #include <QCloseEvent>
 #include <QDateTime>
 #include <QMessageBox>
@@ -30,6 +29,10 @@
 #include <QListWidget>
 #include <QRegularExpression>
 #include <cmath>
+
+#ifndef QT_COMPILE_FOR_WASM
+#include <QSerialPortInfo>
+#endif
 
 MainWindow::MainWindow(ApplicationController* controller, QWidget* parent)
     : QMainWindow(parent)
@@ -571,6 +574,13 @@ void MainWindow::saveConfigFromUI()
 void MainWindow::updateSerialPortList()
 {
     m_serialPortCombo->clear();
+    
+#ifdef QT_COMPILE_FOR_WASM
+    // WebAssembly环境下没有串口硬件，提供模拟串口或禁用功能
+    m_serialPortCombo->addItem("COM1 (WebAssembly 模拟串口)");
+    m_serialPortCombo->addItem("COM2 (WebAssembly 模拟串口)");
+    m_serialPortCombo->setEnabled(true);
+#else
     QList<QSerialPortInfo> ports = QSerialPortInfo::availablePorts();
     
     for (const QSerialPortInfo& port : ports) {
@@ -586,6 +596,7 @@ void MainWindow::updateSerialPortList()
     } else {
         m_serialPortCombo->setEnabled(true);
     }
+#endif
 }
 
 void MainWindow::updateWindowList()

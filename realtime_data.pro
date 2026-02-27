@@ -1,10 +1,23 @@
-QT += core gui serialport widgets
-
+QT += core gui widgets
+# 根据编译目标条件添加模块
+!wasm {
+    QT += serialport
+} else {
+    # WebAssembly环境需要额外添加的模块
+    QT += network
+}
 # 编译标准
 CONFIG += c++17
 CONFIG += console
+# CONFIG += wasm  # 不要在此硬编码！WASM构建时由 wasm_build.bat 通过 qmake CONFIG+=wasm 传入
 greaterThan(QT_MAJOR_VERSION, 4): QT += widgets
 
+# 为C++代码定义编译宏，方便代码中做条件判断
+wasm {
+    DEFINES += QT_COMPILE_FOR_WASM
+    # 嵌入中文字体后需要更大的初始内存（默认16MB不够）
+    QMAKE_LFLAGS += -s TOTAL_MEMORY=33554432
+}
 # 可执行文件名称
 TARGET = realtime_data
 TEMPLATE = app
@@ -25,12 +38,18 @@ RC_LANG = 0x0804
 
 
 #目标文件目录
-Debug:{
+wasm {
+    # WASM构建：输出到当前build-wasm目录
+    DESTDIR  = ./
+    TEMP_DESTDIR = .
+}
+
+!wasm:Debug:{
     DESTDIR  = ./build/debug
     TEMP_DESTDIR = ./build/temp/debug/$$TARGET
 }
 
-Release:{
+!wasm:Release:{
     DESTDIR  = ./build/release
     TEMP_DESTDIR = ./build/temp/release/$$TARGET
 }

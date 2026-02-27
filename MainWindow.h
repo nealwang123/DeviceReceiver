@@ -3,7 +3,9 @@
 
 #include <QMainWindow>
 #include <QDockWidget>
+#ifndef QT_COMPILE_FOR_WASM
 #include <QSerialPort>
+#endif
 #include <QTimer>
 #include <QList>
 #include <QMdiArea>
