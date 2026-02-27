@@ -1,6 +1,6 @@
 # 实时数据监控系统
 
-一个基于Qt 5.15.2开发的专业级实时数据监控系统，支持串口通信、数据处理、图形显示和远程控制功能。
+一个基于Qt 5.15.2开发的专业级实时数据监控系统，支持串口通信、数据处理、图形显示和远程控制功能。同时支持编译为 **WebAssembly (WASM)**，可直接在浏览器中运行并通过 **GitHub Pages** 托管部署。
 
 ## 📋 项目概述
 
@@ -38,6 +38,12 @@
 - **配置文件**: INI格式配置文件，保存所有用户设置
 - **历史记录**: 指令历史、窗口状态、面板布局的持久化存储
 
+#### 🌐 **WebAssembly 支持**
+- **浏览器运行**: 编译为 WASM，无需安装客户端即可在浏览器中使用
+- **中文字体嵌入**: 自动嵌入 SimHei 字体，浏览器中中文正常显示
+- **GitHub Pages 部署**: 一键生成静态资源到 `docs/` 目录，推送即部署
+- **条件编译**: 通过 `QT_COMPILE_FOR_WASM` 宏，桌面端和 WASM 端共用同一套代码
+
 ### 🏗️ 系统架构
 
 ```
@@ -51,13 +57,17 @@
 │   ├── DataProcessor (数据处理)
 │   └── PlotWindowManager (绘图窗口管理)
 ├── 数据层 (Data Layer)
-│   ├── SerialReceiver (串口接收器)
+│   ├── SerialReceiver (串口接收器 / WASM模拟数据)
 │   ├── FrameData (数据帧结构)
-│   └── PlotWindow (绘图窗口)
-└── 工具层 (Utility Layer)
-    ├── 构建脚本系统
-    ├── 日志系统
-    └── 单元测试框架
+│   └── PlotWindow / ArrayPlotWindow / HeatMapPlotWindow (绘图窗口)
+├── 工具层 (Utility Layer)
+│   ├── 构建脚本系统 (桌面端 + WASM)
+│   ├── 日志系统
+│   └── 单元测试框架
+└── 部署层 (Deployment Layer)
+    ├── wasm_build.bat (WASM 一体化构建脚本)
+    ├── docs/ (GitHub Pages 静态资源)
+    └── 条件编译 (QT_COMPILE_FOR_WASM)
 ```
 
 #### 核心组件说明
@@ -72,12 +82,24 @@
 ## 🚀 快速开始
 
 ### 开发环境要求
+
+#### 桌面端 (Windows)
 - **Qt版本**: 5.15.2 msvc2019_64
 - **Visual Studio**: 2019/2022 Community或Professional
 - **编译器**: MSVC 2019 (v14.2+) 64位
 - **操作系统**: Windows 10/11
 - **内存**: 最低4GB，推荐8GB以上
 - **磁盘空间**: 最少1GB可用空间
+
+#### WebAssembly 端 (WASM)
+- **Qt版本**: 5.15.2 wasm_32
+- **Emscripten SDK**: 与 Qt 5.15.2 匹配的 emsdk 版本
+- **make工具**: GNU make（如 `C:\arc_gnu\bin\make.exe`）
+- **Python 3**: 用于本地 HTTP 预览服务器
+
+> 💡 默认路径配置（可在 `wasm_build.bat` 中修改）：
+> - Qt WASM: `C:\Qt\Qt5.15.2\5.15.2\wasm_32`
+> - emsdk: `C:\Qt\emsdk\emsdk`
 
 ## 🛠️ 构建和运行
 
@@ -127,18 +149,69 @@ build_and_run_fixed_cn.bat -Debug -Run
 | `build.ps1` | PowerShell构建脚本 |
 | `build_ps.ps1` | 原始PowerShell构建脚本 |
 
+#### 🌐 **`wasm_build.bat` - WebAssembly 构建脚本**
+
+将项目编译为 WebAssembly，可在浏览器中直接运行。
+
+**基本用法:**
+```cmd
+wasm_build.bat [命令]
+```
+
+**可用命令:**
+| 命令 | 说明 | 示例 |
+|------|------|------|
+| 无参数 | 增量构建 | `wasm_build.bat` |
+| `rebuild` | 清理后完整重新构建 | `wasm_build.bat rebuild` |
+| `clean` | 清理 build-wasm 目录 | `wasm_build.bat clean` |
+| `serve` | 启动本地HTTP预览服务器 | `wasm_build.bat serve` |
+| `deploy` | 复制产物到 docs/ 用于 GitHub Pages | `wasm_build.bat deploy` |
+
+**典型工作流:**
+```cmd
+REM 首次构建
+wasm_build.bat rebuild
+
+REM 本地预览（浏览器访问 http://localhost:8000/realtime_data.html）
+wasm_build.bat serve
+
+REM 部署到 GitHub Pages
+wasm_build.bat deploy
+git add docs/
+git commit -m "deploy wasm to GitHub Pages"
+git push
+```
+
 ### 构建目录结构
 
 ```
 build/
-├── release/           # Release版本输出目录
-│   ├── realtime_data.exe  # 主程序
-│   ├── realtime_data.pdb  # 程序数据库文件
-│   └── realtime_data.log  # 运行日志文件
-└── debug/             # Debug版本输出目录
+├── release/                # Release版本输出目录
+│   ├── realtime_data.exe   # 主程序
+│   ├── realtime_data.pdb   # 程序数据库文件
+│   └── realtime_data.log   # 运行日志文件
+└── debug/                  # Debug版本输出目录
     ├── realtime_data.exe
     ├── realtime_data.pdb
     └── realtime_data.log
+
+build-wasm/                 # WASM构建输出目录
+├── realtime_data.html      # 入口HTML页面 (~3KB)
+├── realtime_data.js        # Emscripten 胶水代码 (~573KB)
+├── realtime_data.wasm      # WebAssembly 二进制 (~23MB)
+├── qtloader.js             # Qt WASM 加载器 (~21KB)
+├── qtlogo.svg              # Qt Logo
+├── obj/                    # 编译中间文件
+├── moc/                    # MOC 生成文件
+└── Makefile                # 生成的 Makefile
+
+docs/                       # GitHub Pages 部署目录
+├── index.html              # 入口页面 (从 realtime_data.html 复制)
+├── realtime_data.js
+├── realtime_data.wasm
+├── qtloader.js
+├── qtlogo.svg
+└── .nojekyll               # 禁止 Jekyll 处理
 ```
 
 ### 🔧 **使用Qt Creator开发**
@@ -310,6 +383,52 @@ cmd /c "build_and_run_fixed_cn.bat -Help"
 3. **缓存状态**: 检查DataCacheManager是否正常初始化
 4. **信号连接**: 确认各模块间信号槽连接正常
 
+## 🌐 WebAssembly 与 GitHub Pages 部署
+
+### WASM 构建说明
+
+项目通过条件编译宏 `QT_COMPILE_FOR_WASM` 区分桌面端和 WASM 端代码。WASM 构建时：
+- 串口模块 (`QSerialPort`) 被排除，仅保留模拟数据模式
+- 自动嵌入 SimHei 中文字体（`files/fonts/simhei.ttf`，约 9.3MB）
+- OpenGL/freeglut 依赖被排除
+- 初始内存设为 32MB (`TOTAL_MEMORY=33554432`)，并启用 `ALLOW_MEMORY_GROWTH`
+
+### GitHub Pages 部署步骤
+
+1. **构建 WASM 版本**
+   ```cmd
+   wasm_build.bat rebuild
+   ```
+
+2. **生成部署文件**
+   ```cmd
+   wasm_build.bat deploy
+   ```
+   这会将构建产物复制到 `docs/` 目录，并将 `realtime_data.html` 重命名为 `index.html`。
+
+3. **提交并推送**
+   ```cmd
+   git add docs/ .gitignore .gitattributes
+   git commit -m "deploy wasm to GitHub Pages"
+   git push
+   ```
+
+4. **配置 GitHub Pages**
+   - 进入 GitHub 仓库 **Settings → Pages**
+   - Source 选择 **Deploy from a branch**
+   - Branch 选择 `main`，Folder 选择 `/docs`
+   - 保存后等待几分钟，即可通过 `https://<用户名>.github.io/<仓库名>/` 访问
+
+### 注意事项
+
+| 项目 | 说明 |
+|------|------|
+| **文件大小** | `.wasm` 约 23MB（含嵌入字体），在 GitHub 100MB 单文件限制内 |
+| **首次加载** | 浏览器首次加载较慢，后续会使用缓存 |
+| **COOP/COEP** | Qt 5.15.2 wasm_32 为单线程模式，不需要特殊 HTTP 头 |
+| **浏览器兼容** | 支持 Chrome、Firefox、Edge 等现代浏览器 |
+| **串口功能** | WASM 模式下仅支持模拟数据，不支持真实串口 |
+
 ## 🔧 高级配置
 
 ### 自定义数据协议
@@ -405,11 +524,20 @@ ApplicationController::started → MainWindow::updateConnectionStatus
 - 完善错误处理机制
 - 更新文档和README
 
+### v1.3 - WebAssembly 版本
+- 新增 WebAssembly (WASM) 编译支持，可在浏览器中运行
+- 条件编译区分桌面端和 WASM 端代码 (`QT_COMPILE_FOR_WASM`)
+- 嵌入 SimHei 中文字体解决浏览器中文显示问题
+- 排除 WASM 不支持的 OpenGL/freeglut/QSerialPort 依赖
+- 新增 `wasm_build.bat` 一体化构建脚本（build/clean/rebuild/serve/deploy）
+- 支持 GitHub Pages 一键部署（`wasm_build.bat deploy`）
+- 新增 `.gitignore` 和 `.gitattributes` 配置
+
 ### 当前版本
-- **版本号**: v1.2.1
+- **版本号**: v1.3.0
 - **状态**: 稳定运行
 - **最后更新**: 2026年2月
-- **主要特性**: 完整的实时数据监控解决方案
+- **主要特性**: 完整的实时数据监控解决方案 + WebAssembly 浏览器端部署
 
 ## 📞 支持与贡献
 
