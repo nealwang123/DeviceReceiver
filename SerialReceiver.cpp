@@ -1,5 +1,4 @@
 ﻿#include "SerialReceiver.h"
-#include "DataCacheManager.h"
 #include <QDateTime>
 #include <QDebug>
 #include <QRandomGenerator>
@@ -9,7 +8,7 @@
 #include <cstring>
 #include <cmath>
 
-SerialReceiver::SerialReceiver(QObject *parent) : QObject(parent)
+SerialReceiver::SerialReceiver(QObject *parent) : IReceiverBackend(parent)
 {
 #ifndef QT_COMPILE_FOR_WASM
     m_serialPort = new QSerialPort(this);
@@ -26,13 +25,55 @@ SerialReceiver::SerialReceiver(QObject *parent) : QObject(parent)
 
 SerialReceiver::~SerialReceiver()
 {
+    disconnectBackend();
+    m_mockTimer->stop();
+}
+
+bool SerialReceiver::connectBackend(const QString& endpoint)
+{
+#ifdef QT_COMPILE_FOR_WASM
+    Q_UNUSED(endpoint)
+    return true;
+#else
+    QStringList endpointParts = endpoint.split("|", Qt::SkipEmptyParts);
+    QString portName = endpointParts.isEmpty() ? endpoint : endpointParts.first();
+    int baudRate = 115200;
+    if (endpointParts.size() > 1) {
+        bool ok = false;
+        int parsed = endpointParts.at(1).toInt(&ok);
+        if (ok && parsed > 0) {
+            baudRate = parsed;
+        }
+    }
+    return openSerial(portName, baudRate);
+#endif
+}
+
+void SerialReceiver::disconnectBackend()
+{
     closeSerial();
+}
+
+bool SerialReceiver::isBackendConnected() const
+{
+    return isSerialOpen();
+}
+
+void SerialReceiver::startAcquisition(int intervalMs)
+{
+    startMockData(intervalMs);
+}
+
+void SerialReceiver::stopAcquisition()
+{
     m_mockTimer->stop();
 }
 
 bool SerialReceiver::openSerial(const QString& portName, int baudRate)
 {
 #ifndef QT_COMPILE_FOR_WASM
+    m_mockTimer->stop();
+    m_paused = false;
     m_serialPort->setPortName(portName);
     m_serialPort->setBaudRate(baudRate);
     m_serialPort->setDataBits(QSerialPort::Data8);
@@ -40,7 +81,7 @@ bool SerialReceiver::openSerial(const QString& portName, int baudRate)
     m_serialPort->setStopBits(QSerialPort::OneStop);
     m_serialPort->setFlowControl(QSerialPort::NoFlowControl);
 
-    if (m_serialPort->open(QIODevice::ReadOnly)) {
+    if (m_serialPort->open(QIODevice::ReadWrite)) {
         qInfo() << QString("串口[%1]打开成功，波特率：%2").arg(portName).arg(baudRate);
         m_serialBuffer.clear();
         return true;
@@ -58,6 +99,7 @@ bool SerialReceiver::openSerial(const QString& portName, int baudRate)
 
 void SerialReceiver::closeSerial()
 {
+    stopAcquisition();
 #ifndef QT_COMPILE_FOR_WASM
     if (m_serialPort->isOpen()) {
         m_serialPort->close();
@@ -80,15 +122,30 @@ bool SerialReceiver::isSerialOpen() const
 
 void SerialReceiver::startMockData(int intervalMs)
 {
+    m_paused = false;
     qInfo() << QString("开启模拟数据，间隔：%1ms").arg(intervalMs);
     m_mockTimer->setInterval(intervalMs);
     m_mockTimer->start();
 }
 
+void SerialReceiver::setPaused(bool paused)
+{
+    m_paused = paused;
+    if (m_paused) {
+        stopAcquisition();
+        m_serialBuffer.clear();
+    }
+}
+
 void SerialReceiver::onSerialReadyRead()
 {
 #ifndef QT_COMPILE_FOR_WASM
-    m_serialBuffer.append(m_serialPort->readAll());
+    QByteArray chunk = m_serialPort->readAll();
+    emit dataReceived(chunk, true);
+    if (m_paused) {
+        return;
+    }
+    m_serialBuffer.append(chunk);
     processSerialBuffer();
 #else
     // WebAssembly环境下无真实串口数据
@@ -98,6 +155,10 @@ void SerialReceiver::onSerialReadyRead()
 
 void SerialReceiver::onMockDataTimer()
 {
+    if (m_paused) {
+        return;
+    }
+
     // 生成模拟帧数据（无硬件时测试用）
     FrameData frame;
     frame.timestamp = QDateTime::currentMSecsSinceEpoch();
@@ -130,14 +191,25 @@ void SerialReceiver::onMockDataTimer()
     }
     //makeComplex = !makeComplex;
 
-    // 写入缓存
-    DataCacheManager::instance()->addFrame(frame);
+    emit frameReceived(frame);
 
-    // 更新日志格式，只显示通道信息
-    qDebug() << QString("模拟帧[%1]：模式=%2 通道数=%3")
-                .arg(frame.frameId)
-                .arg(frame.detectMode == FrameData::MultiChannelReal ? "实部" : "复数")
-                .arg(frame.channelCount);
+    QByteArray raw;
+    QDataStream ds(&raw, QIODevice::WriteOnly);
+    ds.setByteOrder(QDataStream::LittleEndian);
+    ds << static_cast<quint64>(frame.timestamp);
+    ds << static_cast<quint16>(frame.frameId);
+    emit dataReceived(raw.toHex(' ').toUpper(), true);
+
+    // 节流调试日志：最多每秒输出一次，避免刷屏
+    static qint64 lastMockLogMs = 0;
+    const qint64 nowMs = frame.timestamp;
+    if (nowMs - lastMockLogMs >= 1000) {
+        lastMockLogMs = nowMs;
+        qDebug() << QString("模拟帧[%1]：模式=%2 通道数=%3")
+                    .arg(frame.frameId)
+                    .arg(frame.detectMode == FrameData::MultiChannelReal ? "实部" : "复数")
+                    .arg(frame.channelCount);
+    }
 }
 
 void SerialReceiver::processSerialBuffer()
@@ -150,18 +222,42 @@ void SerialReceiver::processSerialBuffer()
             break;
         }
 
-        if (m_serialBuffer.size() < headIndex + FRAME_LENGTH) {
+        if (headIndex > 0) {
+            m_serialBuffer.remove(0, headIndex);
+        }
+
+        if (m_serialBuffer.size() < FRAME_LENGTH) {
             break; // 数据不足，等待下一次
         }
 
+        int frameLength = FRAME_LENGTH;
+        if (m_serialBuffer.size() >= 18) {
+            const quint8 modeByte = static_cast<quint8>(m_serialBuffer.at(16));
+            const quint8 channelCount = static_cast<quint8>(m_serialBuffer.at(17));
+            if (modeByte <= static_cast<quint8>(FrameData::MultiChannelComplex)) {
+                int payloadBytes = 0;
+                if (modeByte == static_cast<quint8>(FrameData::MultiChannelReal)) {
+                    payloadBytes = static_cast<int>(channelCount) * static_cast<int>(sizeof(float));
+                } else if (modeByte == static_cast<quint8>(FrameData::MultiChannelComplex)) {
+                    payloadBytes = static_cast<int>(channelCount) * static_cast<int>(sizeof(float)) * 2;
+                }
+
+                const int candidateLength = 18 + payloadBytes;
+                if (m_serialBuffer.size() < candidateLength) {
+                    break; // 扩展帧尚未接收完整
+                }
+                frameLength = candidateLength;
+            }
+        }
+
         // 提取完整帧
-        QByteArray rawFrame = m_serialBuffer.mid(headIndex, FRAME_LENGTH);
-        m_serialBuffer.remove(0, headIndex + FRAME_LENGTH);
+        QByteArray rawFrame = m_serialBuffer.left(frameLength);
+        m_serialBuffer.remove(0, frameLength);
 
         // 解析并写入缓存
         FrameData frame = parseRawData(rawFrame);
         frame.timestamp = QDateTime::currentMSecsSinceEpoch();
-        DataCacheManager::instance()->addFrame(frame);
+        emit frameReceived(frame);
 
         qDebug() << QString("解析帧[%1]：模式=%2 通道数=%3")
                     .arg(frame.frameId)
@@ -175,8 +271,8 @@ FrameData SerialReceiver::parseRawData(const QByteArray& rawFrame)
     FrameData frame;
     // 使用安全解析，假定帧格式（小端）：
     // [0-1] head(2) | [2-3] frameId(u16) | [4-7] temperature(float) | [8-11] humidity(float) | [12-15] voltage(float)
-    if (rawFrame.size() != FRAME_LENGTH) {
-        qWarning() << "解析错误：帧长度不匹配，期待" << FRAME_LENGTH << "实际" << rawFrame.size();
+    if (rawFrame.size() < FRAME_LENGTH) {
+        qWarning() << "解析错误：帧长度不足，期待至少" << FRAME_LENGTH << "实际" << rawFrame.size();
         return frame;
     }
 
@@ -209,8 +305,11 @@ FrameData SerialReceiver::parseRawData(const QByteArray& rawFrame)
         quint8 chCount = 0;
         ds >> modeByte;
         ds >> chCount;
-        frame.detectMode = static_cast<FrameData::DetectionMode>(modeByte);
-        frame.channelCount = chCount;
+        if (modeByte <= static_cast<quint8>(FrameData::MultiChannelComplex)) {
+            frame.detectMode = static_cast<FrameData::DetectionMode>(modeByte);
+            frame.channelCount = chCount;
+        }
+
         if (frame.channelCount > 0) {
             if (frame.detectMode == FrameData::MultiChannelReal) {
                 frame.channels_comp0.resize(frame.channelCount);

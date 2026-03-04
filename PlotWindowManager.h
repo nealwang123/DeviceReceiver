@@ -171,6 +171,8 @@ private:
     QList<PlotWindow*> m_windows;          // 管理的窗口列表
     QTimer* m_updateTimer;                 // 数据更新定时器
     bool m_isInitialized;                  // 初始化标志
+    qint64 m_lastDispatchedTimestamp{0};   // 上次已分发的最新时间戳
+    int m_baseUpdateIntervalMs{50};        // 基础刷新间隔（来自配置）
 };
 
 #endif // PLOTWINDOWMANAGER_H

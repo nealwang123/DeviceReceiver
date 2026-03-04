@@ -11,6 +11,7 @@
 #include <QMdiArea>
 #include <QMdiSubWindow>
 #include <QFile>
+#include <QDateTime>
 #include "AppConfig.h"
 
 // 前置声明
@@ -25,6 +26,7 @@ class QLabel;
 class QListWidget;
 class QCheckBox;
 class QSpinBox;
+class QLineEdit;
 
 /**
  * @brief 主界面窗口类，提供设备配置、控制、指令发送和窗口管理功能
@@ -87,7 +89,11 @@ private slots:
     // 设备控制槽函数
     void onConnectClicked();
     void onDisconnectClicked();
+    void onPauseClicked();
+    void onResumeClicked();
+    void onExportClicked();
     void onUseMockDataChanged(bool use);
+    void onBackendTypeChanged(int index);
     
     // 指令发送槽函数
     void onSendClicked();
@@ -205,6 +211,8 @@ private:
     
     // 设备控制组件
     QComboBox* m_serialPortCombo;
+    QComboBox* m_backendTypeCombo;
+    QLineEdit* m_grpcEndpointEdit;
     QComboBox* m_baudRateCombo;
     QComboBox* m_dataBitsCombo;
     QComboBox* m_stopBitsCombo;
@@ -214,6 +222,9 @@ private:
     QSpinBox* m_mockIntervalSpin;
     QPushButton* m_connectButton;
     QPushButton* m_disconnectButton;
+    QPushButton* m_pauseButton;
+    QPushButton* m_resumeButton;
+    QPushButton* m_exportButton;
     QLabel* m_connectionStatusLabel;
     
     // 指令发送组件
@@ -253,6 +264,8 @@ private:
     int m_frameCount;
     int m_alarmCount;
     qint64 m_lastUpdateTime;
+    qint64 m_lastMonitorAppendTime;
+    int m_monitorAppendIntervalMs;
 };
 
 #endif // MAINWINDOW_H

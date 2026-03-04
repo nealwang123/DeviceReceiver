@@ -35,11 +35,14 @@ private:
     QVector<QVector<double>> m_channelValues; // 每通道数据
     QVector<QVector<double>> m_channelValues2; // 复杂模式的第二分量
     
-    int m_maxDataPoints{100};
+    int m_maxDataPoints{1000};
     bool m_useMockData{false};
     qint64 m_frameCount{0};
     int m_currentChannelCount{0};
     FrameData::DetectionMode m_lastMode{FrameData::Legacy};
+    double m_latestTime{0.0};
+    int m_axisUpdateCounter{0};
+    int m_axisUpdateStride{10};
 };
 
 #endif // ARRAYPLOTWINDOW_H

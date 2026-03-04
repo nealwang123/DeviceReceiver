@@ -51,30 +51,6 @@ ArrayPlotWindow::ArrayPlotWindow(QWidget *parent)
     // 初始化数组图（默认8个通道）
     initArrayPlot();
     
-    // 生成初始的虚拟数据
-    for (int i = 0; i < m_maxDataPoints; i++) {
-        double t = i * 0.1;
-        m_timeAxis.append(t);
-        
-        // 为每个通道生成数据
-        for (int ch = 0; ch < m_currentChannelCount; ch++) {
-            if (ch >= m_channelValues.size()) {
-                m_channelValues.resize(ch + 1);
-                m_channelValues2.resize(ch + 1);
-            }
-            double val = 10.0 + 3.0 * ch + 5.0 * std::sin(t * (0.5 + ch * 0.04));
-            m_channelValues[ch].append(val);
-            
-            // 复数模式的第二分量（如果启用）
-            if (ch < m_channelValues2.size()) {
-                m_channelValues2[ch].append(5.0 * std::cos(t * (0.5 + ch * 0.04)));
-            }
-        }
-    }
-    
-    // 更新绘图
-    updateArrayData();
-    
     // 添加到主布局
     mainLayout->addLayout(controlLayout);
     mainLayout->addWidget(m_plot, 1);
@@ -126,9 +102,14 @@ void ArrayPlotWindow::initArrayPlot()
     m_plot->clearItems();
     m_plot->plotLayout()->clear();
     
-    // 设置默认通道数
-    m_currentChannelCount = 8;
+    // 设置默认通道数（若外部已指定通道数则保持）
+    if (m_currentChannelCount <= 0) {
+        m_currentChannelCount = 8;
+    }
     m_channelAxisRects.clear();
+    m_timeAxis.clear();
+    m_latestTime = 0.0;
+    m_axisUpdateCounter = 0;
     
     // 创建通道轴矩形（垂直堆叠）
     for (int i = 0; i < m_currentChannelCount; i++) {
@@ -167,7 +148,7 @@ void ArrayPlotWindow::initArrayPlot()
     m_channelValues.resize(m_currentChannelCount);
     m_channelValues2.resize(m_currentChannelCount);
     
-    m_plot->replot();
+    m_plot->replot(QCustomPlot::rpQueuedReplot);
 }
 
 void ArrayPlotWindow::generateMockData()
@@ -175,73 +156,52 @@ void ArrayPlotWindow::generateMockData()
     if (!m_useMockData) return;
     
     // 追加新的数据点
-    double t = m_timeAxis.isEmpty() ? 0.0 : m_timeAxis.last() + 0.1;
+    const double t = m_timeAxis.isEmpty() ? 0.0 : m_timeAxis.last() + 0.1;
     m_timeAxis.append(t);
+    m_latestTime = t;
     
     // 生成虚拟数据
     for (int ch = 0; ch < m_currentChannelCount; ch++) {
-        if (ch >= m_channelValues.size()) {
-            m_channelValues.resize(ch + 1);
-            m_channelValues2.resize(ch + 1);
-        }
-        
-        double val = 10.0 + 3.0 * ch + 5.0 * std::sin(t * (0.5 + ch * 0.04) + (m_frameCount * 0.01));
-        m_channelValues[ch].append(val);
-        
-        // 如果是复数模式，生成第二分量
-        if (ch < m_channelValues2.size() && m_lastMode == FrameData::MultiChannelComplex) {
-            m_channelValues2[ch].append(5.0 * std::cos(t * (0.5 + ch * 0.04) + (m_frameCount * 0.01)));
+        const double val = 10.0 + 3.0 * ch + 5.0 * std::sin(t * (0.5 + ch * 0.04) + (m_frameCount * 0.01));
+        if (ch < m_plot->graphCount()) {
+            QCPGraph* graph = m_plot->graph(ch);
+            graph->addData(t, val);
+            if ((m_axisUpdateCounter % m_axisUpdateStride) == 0) {
+                graph->rescaleValueAxis(false);
+            }
         }
     }
     
-    // 如果数据超过最大点数，删除最旧的数据
+    // 如果数据超过最大点数，按时间裁剪（与组合图一致）
     if (m_timeAxis.size() > m_maxDataPoints) {
-        m_timeAxis.removeFirst();
-        for (auto &vec : m_channelValues) {
-            if (!vec.isEmpty()) vec.removeFirst();
-        }
-        for (auto &vec : m_channelValues2) {
-            if (!vec.isEmpty()) vec.removeFirst();
+        const int removeCount = m_timeAxis.size() - m_maxDataPoints;
+        const double cutoffKey = m_timeAxis.at(removeCount);
+        m_timeAxis.remove(0, removeCount);
+        for (int i = 0; i < m_plot->graphCount(); ++i) {
+            m_plot->graph(i)->data()->removeBefore(cutoffKey);
         }
     }
     
+    ++m_axisUpdateCounter;
     m_frameCount++;
     updateArrayData();
 }
 
 void ArrayPlotWindow::updateArrayData()
 {
-    if (!m_plot || m_plot->graphCount() < m_currentChannelCount) return;
-    
-    // 更新每个通道的数据
-    for (int i = 0; i < m_currentChannelCount; i++) {
-        if (i < m_plot->graphCount()) {
-            QCPGraph* graph = m_plot->graph(i);
-            graph->setData(m_timeAxis, m_channelValues[i]);
-            
-            // 自动范围缩放每个Y轴
-            if (!m_channelValues[i].isEmpty()) {
-                auto [minVal, maxVal] = std::minmax_element(m_channelValues[i].begin(), m_channelValues[i].end());
-                double range = *maxVal - *minVal;
-                if (range < 0.1) range = 0.1;
-                if (i < m_channelAxisRects.size()) {
-                    m_channelAxisRects[i]->axis(QCPAxis::atLeft)->setRange(*minVal - 0.1*range, *maxVal + 0.1*range);
-                }
-            }
-        }
+    if (!m_plot || m_channelAxisRects.isEmpty() || m_timeAxis.isEmpty()) return;
+
+    const double lower = m_timeAxis.first();
+    double upper = m_timeAxis.last();
+    if (upper <= lower) {
+        upper = lower + 1.0;
     }
-    
-    // 设置X轴范围（共享）
-    if (!m_timeAxis.isEmpty() && !m_channelAxisRects.isEmpty()) {
-        double firstTime = m_timeAxis.first();
-        double lastTime = m_timeAxis.last();
-        
-        for (auto axisRect : m_channelAxisRects) {
-            axisRect->axis(QCPAxis::atBottom)->setRange(firstTime, lastTime);
-        }
+
+    for (auto axisRect : m_channelAxisRects) {
+        axisRect->axis(QCPAxis::atBottom)->setRange(lower, upper);
     }
-    
-    m_plot->replot();
+
+    m_plot->replot(QCustomPlot::rpQueuedReplot);
 }
 
 void ArrayPlotWindow::onDataUpdated(const QVector<FrameData>& frames)
@@ -253,54 +213,63 @@ void ArrayPlotWindow::onDataUpdated(const QVector<FrameData>& frames)
         if (frame.detectMode != m_lastMode || frame.channelCount != m_currentChannelCount) {
             // 模式或通道数变化，需要重建布局
             m_lastMode = frame.detectMode;
-            m_currentChannelCount = frame.channelCount;
+            m_currentChannelCount = qBound(1, static_cast<int>(frame.channelCount), 200);
             
             // 清空现有数据
             m_timeAxis.clear();
             m_channelValues.clear();
             m_channelValues2.clear();
+            m_latestTime = 0.0;
+            m_axisUpdateCounter = 0;
             
             // 重新初始化绘图
             initArrayPlot();
         }
         
-        double t = m_timeAxis.isEmpty() ? 0.0 : m_timeAxis.last() + 0.1;
+        const double t = (frame.timestamp > 0)
+            ? static_cast<double>(frame.timestamp)
+            : (m_timeAxis.isEmpty() ? 0.0 : m_timeAxis.last() + 0.1);
         m_timeAxis.append(t);
+        m_latestTime = t;
         
         // 根据模式处理数据
         if (frame.detectMode == FrameData::MultiChannelReal) {
             // 实数模式
             for (int ch = 0; ch < m_currentChannelCount; ch++) {
-                if (ch >= m_channelValues.size()) {
-                    m_channelValues.resize(ch + 1);
-                }
                 double val = (ch < frame.channels_comp0.size()) ? frame.channels_comp0.at(ch) : qQNaN();
-                m_channelValues[ch].append(val);
+                if (ch < m_plot->graphCount()) {
+                    QCPGraph* graph = m_plot->graph(ch);
+                    graph->addData(t, val);
+                    if ((m_axisUpdateCounter % m_axisUpdateStride) == 0) {
+                        graph->rescaleValueAxis(false);
+                    }
+                }
             }
         } else if (frame.detectMode == FrameData::MultiChannelComplex) {
             // 复数模式
             for (int ch = 0; ch < m_currentChannelCount; ch++) {
-                if (ch >= m_channelValues.size()) {
-                    m_channelValues.resize(ch + 1);
-                    m_channelValues2.resize(ch + 1);
-                }
                 double re = (ch < frame.channels_comp0.size()) ? frame.channels_comp0.at(ch) : qQNaN();
-                double im = (ch < frame.channels_comp1.size()) ? frame.channels_comp1.at(ch) : qQNaN();
-                m_channelValues[ch].append(re);
-                m_channelValues2[ch].append(im);
+                if (ch < m_plot->graphCount()) {
+                    QCPGraph* graph = m_plot->graph(ch);
+                    graph->addData(t, re);
+                    if ((m_axisUpdateCounter % m_axisUpdateStride) == 0) {
+                        graph->rescaleValueAxis(false);
+                    }
+                }
             }
         }
         
-        // 如果数据超过最大点数，删除最旧的数据
+        // 如果数据超过最大点数，按时间裁剪
         if (m_timeAxis.size() > m_maxDataPoints) {
-            m_timeAxis.removeFirst();
-            for (auto &vec : m_channelValues) {
-                if (!vec.isEmpty()) vec.removeFirst();
-            }
-            for (auto &vec : m_channelValues2) {
-                if (!vec.isEmpty()) vec.removeFirst();
+            const int removeCount = m_timeAxis.size() - m_maxDataPoints;
+            const double cutoffKey = m_timeAxis.at(removeCount);
+            m_timeAxis.remove(0, removeCount);
+            for (int i = 0; i < m_plot->graphCount(); ++i) {
+                m_plot->graph(i)->data()->removeBefore(cutoffKey);
             }
         }
+
+        ++m_axisUpdateCounter;
     }
     
     updateArrayData();

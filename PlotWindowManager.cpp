@@ -3,6 +3,7 @@
 #include "HeatMapPlotWindow.h"
 #include "ArrayPlotWindow.h"
 #include "DataCacheManager.h"
+#include "AppConfig.h"
 #include <QMdiArea>
 #include <QMdiSubWindow>
 #include <QPointer>
@@ -48,7 +49,12 @@ void PlotWindowManager::initialize()
 
     // 创建更新定时器
     m_updateTimer = new QTimer(this);
-    m_updateTimer->setInterval(50); // 默认50ms（20Hz）
+    int intervalMs = 50;
+    if (AppConfig* config = AppConfig::instance()) {
+        intervalMs = qBound(10, config->plotRefreshIntervalMs(), 1000);
+    }
+    m_baseUpdateIntervalMs = intervalMs;
+    m_updateTimer->setInterval(intervalMs);
     connect(m_updateTimer, &QTimer::timeout, this, &PlotWindowManager::onUpdateTimer);
 
     // 连接DataCacheManager的报警信号
@@ -73,6 +79,8 @@ void PlotWindowManager::cleanup()
         m_updateTimer->deleteLater();
         m_updateTimer = nullptr;
     }
+
+    m_lastDispatchedTimestamp = 0;
     
     m_isInitialized = false;
 }
@@ -268,21 +276,50 @@ QVector<FrameData> PlotWindowManager::getRecentFrames(int count)
 
 void PlotWindowManager::onUpdateTimer()
 {
-    // 批量拉取最近5帧数据
-    QVector<FrameData> frames = getRecentFrames(5);
+    // 自适应拉取：窗口越多，单次拉取越少，降低UI线程突发负载
+    int fetchCount = 5;
+    if (m_windows.size() > 8) {
+        fetchCount = 2;
+    } else if (m_windows.size() > 4) {
+        fetchCount = 3;
+    }
+
+    QVector<FrameData> frames = getRecentFrames(fetchCount);
     if (frames.isEmpty()) {
         return;
     }
-    
+
+    // 仅分发“新增帧”，避免重复绘制最近窗口数据
+    QVector<FrameData> incrementalFrames;
+    incrementalFrames.reserve(frames.size());
+    qint64 maxTimestamp = m_lastDispatchedTimestamp;
+
+    for (const FrameData& frame : frames) {
+        if (frame.timestamp > m_lastDispatchedTimestamp) {
+            incrementalFrames.append(frame);
+            if (frame.timestamp > maxTimestamp) {
+                maxTimestamp = frame.timestamp;
+            }
+        }
+    }
+
+    if (incrementalFrames.isEmpty()) {
+        return;
+    }
+
+    m_lastDispatchedTimestamp = maxTimestamp;
+
     // 分发数据给所有注册的窗口
-    emit dataUpdated(frames);
+    emit dataUpdated(incrementalFrames);
     
     // 性能监控：如果窗口过多，可以适当降低更新频率
     if (m_windows.size() > 5) {
         // 每5个窗口增加10ms延迟
-        int recommendedInterval = 50 + (m_windows.size() / 5) * 10;
+        int recommendedInterval = m_baseUpdateIntervalMs + (m_windows.size() / 5) * 10;
         if (m_updateTimer->interval() != recommendedInterval) {
             setUpdateInterval(recommendedInterval);
         }
+    } else if (m_updateTimer->interval() != m_baseUpdateIntervalMs) {
+        setUpdateInterval(m_baseUpdateIntervalMs);
     }
 }

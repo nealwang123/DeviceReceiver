@@ -45,8 +45,19 @@ bool AppConfig::loadFromFile(const QString& filename)
     // 加载串口配置
     m_serialPort = settings.value("Serial/Port", m_serialPort).toString();
     m_baudRate = settings.value("Serial/BaudRate", m_baudRate).toInt();
-    m_useMockData = settings.value("Serial/UseMockData", m_useMockData).toBool();
-    m_mockDataIntervalMs = settings.value("Serial/MockDataIntervalMs", m_mockDataIntervalMs).toInt();
+    m_receiverBackendType = settings.value("Receiver/BackendType", m_receiverBackendType).toString();
+    m_grpcEndpoint = settings.value("Receiver/GrpcEndpoint", m_grpcEndpoint).toString();
+    // 优先读 [Receiver] 下的配置，兼容历史版本中存放在 [Serial] 下的写法
+    if (settings.contains("Receiver/UseMockData")) {
+        m_useMockData = settings.value("Receiver/UseMockData").toBool();
+    } else {
+        m_useMockData = settings.value("Serial/UseMockData", m_useMockData).toBool();
+    }
+    if (settings.contains("Receiver/MockDataIntervalMs")) {
+        m_mockDataIntervalMs = settings.value("Receiver/MockDataIntervalMs").toInt();
+    } else {
+        m_mockDataIntervalMs = settings.value("Serial/MockDataIntervalMs", m_mockDataIntervalMs).toInt();
+    }
     
     // 加载绘图配置
     m_maxPlotPoints = settings.value("Plot/MaxPoints", m_maxPlotPoints).toInt();
@@ -61,6 +72,10 @@ bool AppConfig::loadFromFile(const QString& filename)
     // 加载样式配置
     int styleValue = settings.value("Style/CurrentStyle", static_cast<int>(m_currentStyle)).toInt();
     m_currentStyle = (styleValue == 0) ? DarkStyle : LightStyle;
+
+    // 导出配置
+    m_defaultExportDirectory = settings.value("Export/Directory", m_defaultExportDirectory).toString();
+    m_defaultExportFormat = settings.value("Export/Format", m_defaultExportFormat).toString();
     
     // 日志配置
     m_logLevel = settings.value("Log/Level", m_logLevel).toString();
@@ -86,8 +101,10 @@ bool AppConfig::saveToFile(const QString& filename)
     // 保存串口配置
     settings.setValue("Serial/Port", m_serialPort);
     settings.setValue("Serial/BaudRate", m_baudRate);
-    settings.setValue("Serial/UseMockData", m_useMockData);
-    settings.setValue("Serial/MockDataIntervalMs", m_mockDataIntervalMs);
+    settings.setValue("Receiver/BackendType", m_receiverBackendType);
+    settings.setValue("Receiver/GrpcEndpoint", m_grpcEndpoint);
+    settings.setValue("Receiver/UseMockData", m_useMockData);
+    settings.setValue("Receiver/MockDataIntervalMs", m_mockDataIntervalMs);
     
     // 保存绘图配置
     settings.setValue("Plot/MaxPoints", m_maxPlotPoints);
@@ -101,6 +118,10 @@ bool AppConfig::saveToFile(const QString& filename)
     
     // 保存样式配置
     settings.setValue("Style/CurrentStyle", static_cast<int>(m_currentStyle));
+
+    // 保存导出配置
+    settings.setValue("Export/Directory", m_defaultExportDirectory);
+    settings.setValue("Export/Format", m_defaultExportFormat);
     
     // 保存日志配置
     settings.setValue("Log/Level", m_logLevel);
@@ -124,6 +145,8 @@ void AppConfig::loadDefaults()
     m_expireTimeMs = 60000;
     m_serialPort = "COM3";
     m_baudRate = 115200;
+    m_receiverBackendType = "grpc";
+    m_grpcEndpoint = "127.0.0.1:50051";
     m_useMockData = true;
     m_mockDataIntervalMs = 100;
     m_maxPlotPoints = 200;
@@ -134,6 +157,8 @@ void AppConfig::loadDefaults()
     m_windowSize = QSize(800, 600);
     m_logLevel = "INFO";
     m_currentStyle = LightStyle;  // 确保默认使用浅色主题
+    m_defaultExportDirectory = "exports";
+    m_defaultExportFormat = "hdf5";
     
     qInfo() << "已加载默认配置（浅色主题）";
 }

@@ -22,11 +22,18 @@
 #include <QTimer>
 #include <QLabel>
 #include <QTextEdit>
+#include <QTextDocument>
 #include <QPushButton>
 #include <QCheckBox>
 #include <QComboBox>
 #include <QSpinBox>
+#include <QLineEdit>
 #include <QListWidget>
+#include <QInputDialog>
+#include <QDialog>
+#include <QDialogButtonBox>
+#include <QDateTimeEdit>
+#include <QDir>
 #include <QRegularExpression>
 #include <cmath>
 
@@ -44,6 +51,8 @@ MainWindow::MainWindow(ApplicationController* controller, QWidget* parent)
     , m_frameCount(0)
     , m_alarmCount(0)
     , m_lastUpdateTime(0)
+    , m_lastMonitorAppendTime(0)
+    , m_monitorAppendIntervalMs(200)
 {
     try {
         qDebug() << "[MainWindow] 构造函数开始";
@@ -147,11 +156,17 @@ void MainWindow::updateConnectionStatus(bool connected)
         m_connectionStatusLabel->setStyleSheet("color: green;");
         m_connectButton->setEnabled(false);
         m_disconnectButton->setEnabled(true);
+        m_pauseButton->setEnabled(true);
+        m_resumeButton->setEnabled(false);
+        m_exportButton->setEnabled(true);
     } else {
         m_connectionStatusLabel->setText("未连接");
         m_connectionStatusLabel->setStyleSheet("color: red;");
         m_connectButton->setEnabled(true);
         m_disconnectButton->setEnabled(false);
+        m_pauseButton->setEnabled(false);
+        m_resumeButton->setEnabled(false);
+        m_exportButton->setEnabled(true);
     }
 }
 
@@ -257,6 +272,11 @@ void MainWindow::initUI()
         QFormLayout* serialLayout = new QFormLayout(serialGroup);
         
         m_serialPortCombo = new QComboBox();
+        m_backendTypeCombo = new QComboBox();
+        m_backendTypeCombo->addItem("串口 (Serial)", "serial");
+        m_backendTypeCombo->addItem("gRPC Client", "grpc");
+        m_grpcEndpointEdit = new QLineEdit();
+        m_grpcEndpointEdit->setPlaceholderText("127.0.0.1:50051");
         m_baudRateCombo = new QComboBox();
         m_dataBitsCombo = new QComboBox();
         m_stopBitsCombo = new QComboBox();
@@ -269,6 +289,8 @@ void MainWindow::initUI()
         m_parityCombo->addItems({"无", "偶校验", "奇校验", "标记", "空格"});
         m_flowControlCombo->addItems({"无", "硬件", "软件"});
         
+        serialLayout->addRow("接收后端:", m_backendTypeCombo);
+        serialLayout->addRow("gRPC地址:", m_grpcEndpointEdit);
         serialLayout->addRow("端口:", m_serialPortCombo);
         serialLayout->addRow("波特率:", m_baudRateCombo);
         serialLayout->addRow("数据位:", m_dataBitsCombo);
@@ -298,12 +320,20 @@ void MainWindow::initUI()
         
         m_connectButton = new QPushButton("连接");
         m_disconnectButton = new QPushButton("断开");
+        m_pauseButton = new QPushButton("暂停采集");
+        m_resumeButton = new QPushButton("恢复采集");
+        m_exportButton = new QPushButton("导出缓存");
         m_disconnectButton->setEnabled(false);
+        m_pauseButton->setEnabled(false);
+        m_resumeButton->setEnabled(false);
         m_connectionStatusLabel = new QLabel("未连接");
         m_connectionStatusLabel->setStyleSheet("color: red;");
         
         controlLayout->addWidget(m_connectButton);
         controlLayout->addWidget(m_disconnectButton);
+        controlLayout->addWidget(m_pauseButton);
+        controlLayout->addWidget(m_resumeButton);
+        controlLayout->addWidget(m_exportButton);
         controlLayout->addStretch();
         controlLayout->addWidget(m_connectionStatusLabel);
         
@@ -419,6 +449,7 @@ void MainWindow::initUI()
         
         m_dataMonitor = new QTextEdit();
         m_dataMonitor->setReadOnly(true);
+        m_dataMonitor->document()->setMaximumBlockCount(1500);
         
         // 状态栏
         QHBoxLayout* statusLayout = new QHBoxLayout();
@@ -482,7 +513,12 @@ void MainWindow::initConnections()
     // 设备控制信号槽
     connect(m_connectButton, &QPushButton::clicked, this, &MainWindow::onConnectClicked);
     connect(m_disconnectButton, &QPushButton::clicked, this, &MainWindow::onDisconnectClicked);
+    connect(m_pauseButton, &QPushButton::clicked, this, &MainWindow::onPauseClicked);
+    connect(m_resumeButton, &QPushButton::clicked, this, &MainWindow::onResumeClicked);
+    connect(m_exportButton, &QPushButton::clicked, this, &MainWindow::onExportClicked);
     connect(m_useMockDataCheck, &QCheckBox::toggled, this, &MainWindow::onUseMockDataChanged);
+        connect(m_backendTypeCombo, QOverload<int>::of(&QComboBox::currentIndexChanged),
+            this, &MainWindow::onBackendTypeChanged);
     
     // 指令发送信号槽
     connect(m_sendButton, &QPushButton::clicked, this, &MainWindow::onSendClicked);
@@ -508,6 +544,10 @@ void MainWindow::loadConfigToUI()
     }
     
     // 加载串口配置
+    const QString backendType = config->receiverBackendType().trimmed().toLower();
+    const int backendIndex = m_backendTypeCombo->findData(backendType.isEmpty() ? "grpc" : backendType);
+    m_backendTypeCombo->setCurrentIndex(backendIndex >= 0 ? backendIndex : 0);
+    m_grpcEndpointEdit->setText(config->grpcEndpoint());
     m_serialPortCombo->setCurrentText(config->serialPort());
     m_baudRateCombo->setCurrentText(QString::number(config->baudRate()));
     
@@ -530,6 +570,8 @@ void MainWindow::loadConfigToUI()
     } else {
         m_newlineCombo->setCurrentIndex(3);
     }
+
+    onBackendTypeChanged(m_backendTypeCombo->currentIndex());
 }
 
 void MainWindow::saveConfigFromUI()
@@ -540,6 +582,8 @@ void MainWindow::saveConfigFromUI()
     }
     
     // 保存串口配置
+    config->setReceiverBackendType(m_backendTypeCombo->currentData().toString());
+    config->setGrpcEndpoint(m_grpcEndpointEdit->text().trimmed());
     config->setSerialPort(m_serialPortCombo->currentText());
     config->setBaudRate(m_baudRateCombo->currentText().toInt());
     
@@ -667,8 +711,25 @@ void MainWindow::saveCommandHistory()
 
 void MainWindow::addDataToMonitor(const QString& data, bool isHex, bool isReceived)
 {
-    if (data.isEmpty()) {
+    if (data.isEmpty() || !m_dataMonitor) {
         return;
+    }
+
+    if (isReceived) {
+        if (m_monitorPanel && !m_monitorPanel->isVisible()) {
+            return;
+        }
+
+        const qint64 nowMs = QDateTime::currentMSecsSinceEpoch();
+        if (nowMs - m_lastMonitorAppendTime < m_monitorAppendIntervalMs) {
+            return;
+        }
+        m_lastMonitorAppendTime = nowMs;
+    }
+
+    QString payload = data;
+    if (payload.size() > 256) {
+        payload = payload.left(256) + " ...";
     }
     
     QString timestamp = QDateTime::currentDateTime().toString("hh:mm:ss.zzz");
@@ -679,7 +740,7 @@ void MainWindow::addDataToMonitor(const QString& data, bool isHex, bool isReceiv
                              .arg(timestamp)
                              .arg(direction)
                              .arg(format)
-                             .arg(data);
+                             .arg(payload);
     
     // 添加到监控区域
     m_dataMonitor->append(displayText);
@@ -693,6 +754,12 @@ void MainWindow::addDataToMonitor(const QString& data, bool isHex, bool isReceiv
 void MainWindow::onConnectClicked()
 {
     if (m_appController) {
+        saveConfigFromUI();
+        AppConfig* config = AppConfig::instance();
+        if (config) {
+            config->saveToFile("config.ini");
+        }
+        m_appController->reloadRuntimeConfig();
         m_appController->start();
         updateConnectionStatus(m_appController->isRunning());
     }
@@ -706,10 +773,142 @@ void MainWindow::onDisconnectClicked()
     }
 }
 
+void MainWindow::onPauseClicked()
+{
+    if (!m_appController) {
+        return;
+    }
+
+    m_appController->pauseAcquisition();
+    m_connectionStatusLabel->setText("已暂停");
+    m_connectionStatusLabel->setStyleSheet("color: orange;");
+    m_pauseButton->setEnabled(false);
+    m_resumeButton->setEnabled(true);
+}
+
+void MainWindow::onResumeClicked()
+{
+    if (!m_appController) {
+        return;
+    }
+
+    m_appController->resumeAcquisition();
+    m_connectionStatusLabel->setText("已连接");
+    m_connectionStatusLabel->setStyleSheet("color: green;");
+    m_pauseButton->setEnabled(true);
+    m_resumeButton->setEnabled(false);
+}
+
+void MainWindow::onExportClicked()
+{
+    if (!m_appController) {
+        QMessageBox::warning(this, "导出失败", "应用控制器未初始化");
+        return;
+    }
+
+    QString selectedFilter;
+    const QString defaultPath = QDir::currentPath() + "/exports/cache_export_" +
+                                QDateTime::currentDateTime().toString("yyyyMMdd_HHmmss") + ".h5";
+    const QString filePath = QFileDialog::getSaveFileName(
+        this,
+        "导出缓存数据",
+        defaultPath,
+        "HDF5 文件 (*.h5 *.hdf5);;CSV 文件 (*.csv)",
+        &selectedFilter
+    );
+
+    if (filePath.isEmpty()) {
+        return;
+    }
+
+    qint64 startTimeMs = -1;
+    qint64 endTimeMs = -1;
+    const auto rangeChoice = QMessageBox::question(
+        this,
+        "导出范围",
+        "是否按时间范围导出？\n选择“否”将导出全部缓存。",
+        QMessageBox::Yes | QMessageBox::No,
+        QMessageBox::No
+    );
+
+    if (rangeChoice == QMessageBox::Yes) {
+        const QVector<FrameData> allFrames = DataCacheManager::instance()->getAllFrames();
+        if (allFrames.isEmpty()) {
+            QMessageBox::information(this, "提示", "当前没有可导出的缓存数据");
+            return;
+        }
+
+        const qint64 minTs = allFrames.first().timestamp;
+        const qint64 maxTs = allFrames.last().timestamp;
+
+        QDialog dialog(this);
+        dialog.setWindowTitle("选择时间范围");
+        QFormLayout* formLayout = new QFormLayout(&dialog);
+
+        QDateTimeEdit* startEdit = new QDateTimeEdit(QDateTime::fromMSecsSinceEpoch(minTs), &dialog);
+        QDateTimeEdit* endEdit = new QDateTimeEdit(QDateTime::fromMSecsSinceEpoch(maxTs), &dialog);
+        startEdit->setDisplayFormat("yyyy-MM-dd HH:mm:ss.zzz");
+        endEdit->setDisplayFormat("yyyy-MM-dd HH:mm:ss.zzz");
+        startEdit->setCalendarPopup(true);
+        endEdit->setCalendarPopup(true);
+
+        formLayout->addRow("开始时间", startEdit);
+        formLayout->addRow("结束时间", endEdit);
+
+        QDialogButtonBox* buttons = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel, &dialog);
+        formLayout->addWidget(buttons);
+        connect(buttons, &QDialogButtonBox::accepted, &dialog, &QDialog::accept);
+        connect(buttons, &QDialogButtonBox::rejected, &dialog, &QDialog::reject);
+
+        if (dialog.exec() != QDialog::Accepted) {
+            return;
+        }
+
+        startTimeMs = startEdit->dateTime().toMSecsSinceEpoch();
+        endTimeMs = endEdit->dateTime().toMSecsSinceEpoch();
+        if (endTimeMs < startTimeMs) {
+            QMessageBox::warning(this, "导出失败", "结束时间不能早于开始时间");
+            return;
+        }
+    }
+
+    QString format = "csv";
+    if (selectedFilter.contains("HDF5", Qt::CaseInsensitive) ||
+        filePath.endsWith(".h5", Qt::CaseInsensitive) ||
+        filePath.endsWith(".hdf5", Qt::CaseInsensitive)) {
+        format = "hdf5";
+    }
+
+    QString error;
+    const bool ok = m_appController->exportCacheToFile(filePath, format, startTimeMs, endTimeMs, &error);
+    if (!ok) {
+        QMessageBox::warning(this, "导出失败", error);
+        return;
+    }
+
+    QMessageBox::information(this, "导出成功", QString("已导出到：\n%1").arg(filePath));
+}
+
 void MainWindow::onUseMockDataChanged(bool use)
 {
-    Q_UNUSED(use)
-    // 这个功能将在ApplicationController中处理
+    m_mockIntervalSpin->setEnabled(use);
+}
+
+void MainWindow::onBackendTypeChanged(int index)
+{
+    Q_UNUSED(index)
+    const QString backendType = m_backendTypeCombo->currentData().toString();
+    const bool isGrpc = (backendType.compare("grpc", Qt::CaseInsensitive) == 0);
+
+    m_useMockDataCheck->setText(isGrpc ? "启用 gRPC 本地模拟" : "启用模拟数据");
+
+    m_grpcEndpointEdit->setEnabled(isGrpc);
+    m_serialPortCombo->setEnabled(!isGrpc);
+    m_baudRateCombo->setEnabled(!isGrpc);
+    m_dataBitsCombo->setEnabled(!isGrpc);
+    m_stopBitsCombo->setEnabled(!isGrpc);
+    m_parityCombo->setEnabled(!isGrpc);
+    m_flowControlCombo->setEnabled(!isGrpc);
 }
 
 void MainWindow::onSendClicked()
@@ -884,6 +1083,15 @@ void MainWindow::onShowMonitorPanelChanged(bool show)
 
 void MainWindow::onDataReceived(const QByteArray& data, bool isHex)
 {
+    if (m_monitorPanel && !m_monitorPanel->isVisible()) {
+        return;
+    }
+
+    const qint64 nowMs = QDateTime::currentMSecsSinceEpoch();
+    if (nowMs - m_lastMonitorAppendTime < m_monitorAppendIntervalMs) {
+        return;
+    }
+
     QString displayData;
     if (isHex) {
         displayData = data.toHex(' ').toUpper();

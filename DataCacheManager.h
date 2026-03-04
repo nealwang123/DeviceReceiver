@@ -38,10 +38,17 @@ private:
     explicit DataCacheManager(QObject *parent = nullptr);
     static DataCacheManager* m_instance;
 
-    QVector<FrameData> m_frameCache;                 // 数据缓存容器
+    int physicalIndex(int logicalIndex) const;
+    int lowerBoundTimestamp(qint64 timestamp) const;
+    int upperBoundTimestamp(qint64 timestamp) const;
+    QVector<FrameData> snapshotLocked() const;
+
+    QVector<FrameData> m_frameCache;                 // 环形缓存容器
     QReadWriteLock m_rwLock;                         // 读写锁（读共享/写独占）
     int m_maxCacheSize = 10000;                      // 默认最大缓存1万帧
     qint64 m_expireTimeMs = 600000;                  // 默认10分钟过期
+    int m_head = 0;                                  // 逻辑起点
+    int m_size = 0;                                  // 当前有效帧数
 };
 
 #endif // DATACACHEMANAGER_H

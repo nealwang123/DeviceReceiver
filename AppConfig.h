@@ -43,6 +43,12 @@ public:
     
     int baudRate() const { return m_baudRate; }
     void setBaudRate(int rate) { m_baudRate = rate; }
+
+    QString receiverBackendType() const { return m_receiverBackendType; }
+    void setReceiverBackendType(const QString& type) { m_receiverBackendType = type; }
+
+    QString grpcEndpoint() const { return m_grpcEndpoint; }
+    void setGrpcEndpoint(const QString& endpoint) { m_grpcEndpoint = endpoint; }
     
     bool useMockData() const { return m_useMockData; }
     void setUseMockData(bool use) { m_useMockData = use; }
@@ -125,6 +131,13 @@ public:
     
     QString newlineSequence() const { return m_newlineSequence; }
     void setNewlineSequence(const QString& sequence) { m_newlineSequence = sequence; }
+
+    // ========== 导出配置 ==========
+    QString defaultExportDirectory() const { return m_defaultExportDirectory; }
+    void setDefaultExportDirectory(const QString& dir) { m_defaultExportDirectory = dir; }
+
+    QString defaultExportFormat() const { return m_defaultExportFormat; }
+    void setDefaultExportFormat(const QString& format) { m_defaultExportFormat = format; }
     
     // ========== 样式配置 ==========
     Style currentStyle() const { return m_currentStyle; }
@@ -154,6 +167,8 @@ private:
     // 串口配置
     QString m_serialPort = "COM3";     // 串口端口
     int m_baudRate = 115200;           // 波特率
+    QString m_receiverBackendType = "grpc";
+    QString m_grpcEndpoint = "127.0.0.1:50051";
     bool m_useMockData = true;         // 是否使用模拟数据
     int m_mockDataIntervalMs = 100;    // 模拟数据间隔（毫秒）
     
@@ -196,6 +211,10 @@ private:
     bool m_sendAsHex = false;
     bool m_autoSendNewline = true;
     QString m_newlineSequence = "\r\n";
+
+    // 导出配置
+    QString m_defaultExportDirectory = "exports";
+    QString m_defaultExportFormat = "hdf5";
 
     // 日志级别: DEBUG/INFO/WARNING/ERROR
     QString m_logLevel = "INFO";

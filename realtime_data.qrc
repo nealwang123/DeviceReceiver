@@ -7,7 +7,4 @@
         <file>files/css/toolBar_light.css</file>
         <file>files/images/db_icon.svg</file>
     </qresource>
-    <qresource prefix="/fonts">
-        <file>files/fonts/simhei.ttf</file>
-    </qresource>
 </RCC>

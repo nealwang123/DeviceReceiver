@@ -1,4 +1,5 @@
 ﻿#include "PlotWindow.h"
+#include "AppConfig.h"
 #include <QVBoxLayout>
 #include <QHBoxLayout>
 #include <QLabel>
@@ -9,6 +10,13 @@
 PlotWindow::PlotWindow(QWidget *parent) : PlotWindowBase(parent)
 {
     qDebug() << "PlotWindow constructor begin";
+
+    int refreshIntervalMs = 50;
+    if (AppConfig* config = AppConfig::instance()) {
+        m_baseMaxPlotPoints = qMax(100, config->maxPlotPoints());
+        refreshIntervalMs = qBound(10, config->plotRefreshIntervalMs(), 1000);
+    }
+
     // 窗口基础配置
     setWindowTitle("实时数据监控");
     resize(800, 600);
@@ -63,7 +71,7 @@ PlotWindow::PlotWindow(QWidget *parent) : PlotWindowBase(parent)
 
     // 保留定时器用于平滑动画（可选，可以移除或保留）
     m_refreshTimer = new QTimer(this);
-    m_refreshTimer->setInterval(50);
+    m_refreshTimer->setInterval(refreshIntervalMs);
     // 不再连接onRefreshTimer，数据由PlotWindowManager提供
     // m_refreshTimer->start(); // 暂时不启动，等待数据更新
     qDebug() << "PlotWindow constructor end";
@@ -74,6 +82,18 @@ PlotWindow::~PlotWindow()
     if (m_refreshTimer) {
         m_refreshTimer->stop();
     }
+}
+
+int PlotWindow::effectiveMaxPlotPoints() const
+{
+    if (!m_plot) {
+        return m_baseMaxPlotPoints;
+    }
+
+    // 目标控制总绘制点数，通道越多每条曲线保留点数越少
+    const int graphCount = qMax(1, m_plot->graphCount());
+    const int budgetPerGraph = 120000 / graphCount;
+    return qBound(200, qMin(m_baseMaxPlotPoints, budgetPerGraph), m_baseMaxPlotPoints);
 }
 
 void PlotWindow::initPlot()
@@ -96,7 +116,9 @@ void PlotWindow::initPlot()
 
     // 样式优化
     m_plot->setBackground(Qt::white);
-    //m_plot->setAntialiased(true);
+    // 关闭抗锯齿，显著提升实时曲线渲染性能
+    m_plot->setNotAntialiasedElements(QCP::aeAll);
+    m_plot->setNoAntialiasingOnDrag(true);
     m_plot->xAxis->setTickLabelFont(QFont("Microsoft YaHei", 8));
     m_plot->yAxis->setTickLabelFont(QFont("Microsoft YaHei", 8));
 }
@@ -106,197 +128,149 @@ void PlotWindow::onDataUpdated(const QVector<FrameData>& frames)
     if (frames.isEmpty()) {
         return;
     }
-    
-    // 更新绘图数据
     updatePlotData(frames);
-    
-    // 如果定时器未启动，可以启动用于平滑动画
-    if (m_refreshTimer && !m_refreshTimer->isActive()) {
-        // 可选：启动定时器用于平滑重绘
-        // m_refreshTimer->start();
-    }
 }
 
 void PlotWindow::updatePlotData(const QVector<FrameData>& frames)
 {
-    qDebug() << "updatePlotData called with" << frames.size() << "frames, m_plot=" << m_plot;
-    if (!m_plot) {
-        qCritical() << "m_plot is null, aborting update";
-        return;
-    }
+    if (!m_plot || frames.isEmpty()) return;
 
-    // 根据帧的 detectMode 选择绘图策略（兼容 legacy 与 多通道实数）
-    int idx = 0;
+    bool needReplot = false;
+
     for (const auto& frame : frames) {
-        qDebug() << "processing frame" << idx << "id" << frame.frameId
-                 << "mode" << frame.detectMode << "count" << frame.channelCount;
-        idx++;
         if (frame.detectMode == FrameData::Legacy) {
-            // legacy 行为：不再支持
             if (m_viewTypeCombo) m_viewTypeCombo->setVisible(false);
-            // 忽略legacy数据
-            qDebug() << "legacy mode ignored";
+
         } else if (frame.detectMode == FrameData::MultiChannelReal) {
-            // 如果之前是 complex 模式，需要恢复简单布局
+            // 模式切换：complex -> real，需重建布局
             if (m_lastMode == FrameData::MultiChannelComplex) {
-                qDebug() << "mode switch complex->real, clearing axisRects";
-                m_axisRects.clear(); // remove stale pointers
-                if (m_plot && m_plot->plotLayout()) {
-                    qDebug() << "clearing old layout for real mode";
+                m_axisRects.clear();
+                if (m_plot->plotLayout()) {
                     m_plot->plotLayout()->clear();
                     m_plot->clearGraphs();
-                    m_plot->plotLayout()->addElement(0,0,new QCPAxisRect(m_plot));
+                    m_plot->plotLayout()->addElement(0, 0, new QCPAxisRect(m_plot));
                     initPlot();
-                    qDebug() << "simple layout initialized";
                 }
-                // reset channel state since layout changed
                 m_currentChannelCount = 0;
                 m_xTime.clear();
                 m_channelData.clear();
                 m_channelData2.clear();
                 if (m_viewTypeCombo) m_viewTypeCombo->setVisible(false);
             }
-            // 单个多通道信号
-            int ch = static_cast<int>(frame.channelCount);
-            qDebug() << "entered real branch ch=" << ch;
-            if (ch < 0 || ch > 200) {
-                qWarning() << "Unreasonable channel count" << ch << "clamped";
-                ch = qBound(0, ch, 200);
-            }
 
-            // 首次到达或通道数变化时，重建图形并清空旧数据
+            int ch = qBound(0, static_cast<int>(frame.channelCount), 200);
+
+            // 通道数变化时重建 graph
             if (m_currentChannelCount != ch) {
-                qDebug() << "channel count changed from" << m_currentChannelCount << "to" << ch << ", rebuilding graphs";
                 m_currentChannelCount = ch;
-                // 清空现有数据，因为通道数改变了
                 m_xTime.clear();
+                m_xTime.reserve(m_baseMaxPlotPoints + 16);
                 m_channelData.clear();
                 m_channelData.resize(ch);
+                for (auto &vec : m_channelData) {
+                    vec.reserve(m_baseMaxPlotPoints + 16);
+                }
                 m_plot->clearGraphs();
                 for (int i = 0; i < ch; ++i) {
-                    m_plot->addGraph();
+                    QCPGraph* g = m_plot->addGraph();
                     QColor color = QColor::fromHsv((i * 36) % 360, 200, 200);
-                    m_plot->graph(i)->setPen(QPen(color, 2));
-                    m_plot->graph(i)->setName(QString("Ch%1").arg(i + 1));
+                    g->setPen(QPen(color, 1));
+                    g->setSmooth(0);
+                    g->setName(QString("Ch%1").arg(i + 1));
                 }
-                // 不再需要同步通道列表，使用图例交互
             }
 
-            m_xTime.append(frame.timestamp);
-            for (int i = 0; i < ch; ++i) {
-                double v = (i < frame.channels_comp0.size()) ? frame.channels_comp0.at(i) : qQNaN();
+            // 增量追加到本地向量（不触碰 graph 内部数据）
+            double t = static_cast<double>(frame.timestamp);
+            m_xTime.append(t);
+            for (int i = 0; i < ch && i < m_channelData.size(); ++i) {
+                double v = (i < frame.channels_comp0.size())
+                               ? frame.channels_comp0.at(i)
+                               : qQNaN();
                 m_channelData[i].append(v);
             }
-            qDebug() << "real append done";
+            needReplot = true;
+
         } else if (frame.detectMode == FrameData::MultiChannelComplex) {
-            // 切换到复数模式时或通道数变化时重建复杂布局
-            int ch = static_cast<int>(frame.channelCount);
-            if (ch < 0 || ch > 200) {
-                qWarning() << "Unreasonable channel count" << ch << "clamped";
-                ch = qBound(0, ch, 200);
-            }
+            int ch = qBound(0, static_cast<int>(frame.channelCount), 200);
+
             if (m_lastMode != frame.detectMode || m_currentChannelCount != ch) {
-                // 清空现有数据，因为模式改变了
                 m_xTime.clear();
+                m_xTime.reserve(m_baseMaxPlotPoints + 16);
                 m_currentChannelCount = ch;
                 setupComplexLayout(ch);
                 if (m_viewTypeCombo) m_viewTypeCombo->setVisible(true);
             }
 
-            // 时间轴
-            m_xTime.append(frame.timestamp);
-            // 计算数据显示数组
-            QVector<double> topVals(ch);
-            QVector<double> bottomVals(ch);
+            double t = static_cast<double>(frame.timestamp);
             for (int i = 0; i < ch; ++i) {
                 double re = (i < frame.channels_comp0.size()) ? frame.channels_comp0.at(i) : qQNaN();
                 double im = (i < frame.channels_comp1.size()) ? frame.channels_comp1.at(i) : qQNaN();
+                double topVal, bottomVal;
                 if (m_complexViewType == RealImag) {
-                    topVals[i] = re;
-                    bottomVals[i] = im;
+                    topVal = re; bottomVal = im;
                 } else {
-                    topVals[i] = std::hypot(re, im);
-                    bottomVals[i] = std::atan2(im, re);
+                    topVal = std::hypot(re, im); bottomVal = std::atan2(im, re);
                 }
+                if (i < m_channelData.size())  m_channelData[i].append(topVal);
+                if (i < m_channelData2.size()) m_channelData2[i].append(bottomVal);
             }
-            // 添加数据并保持点数限制
-            for (int i = 0; i < ch; ++i) {
-                m_channelData[i].append(topVals[i]);
-                m_channelData2[i].append(bottomVals[i]);
-            }
-            qDebug() << "complex append done";
+            m_xTime.append(t);
+            needReplot = true;
         }
 
-        // 更新上一个模式以避免在同一批帧中重复重建布局
         m_lastMode = frame.detectMode;
     }
 
-    // 记录最新模式以便后续判断
-    if (!frames.isEmpty()) {
-        // m_lastMode 已在循环中设置
-    }
-    qDebug() << "updatePlotData finished, lastMode=" << m_lastMode;
+    if (!needReplot) return;
 
-    // 限制最大点数，避免卡顿
-    if (m_xTime.size() > MAX_PLOT_POINTS) {
-        int removeCount = m_xTime.size() - MAX_PLOT_POINTS;
-        m_xTime.remove(0, removeCount);
+    // ── 裁剪旧数据（纯向量操作）──────────────────────────────
+    const int maxPlotPoints = effectiveMaxPlotPoints();
+    if (m_xTime.size() > maxPlotPoints) {
+        const int excess = m_xTime.size() - maxPlotPoints;
+        m_xTime.remove(0, excess);
         for (auto &vec : m_channelData) {
-            if (vec.size() > removeCount)
-                vec.remove(0, removeCount);
-            else
-                vec.clear();
+            if (vec.size() > maxPlotPoints) vec.remove(0, vec.size() - maxPlotPoints);
         }
         for (auto &vec : m_channelData2) {
-            if (vec.size() > removeCount)
-                vec.remove(0, removeCount);
-            else
-                vec.clear();
+            if (vec.size() > maxPlotPoints) vec.remove(0, vec.size() - maxPlotPoints);
         }
     }
 
-    // 更新曲线数据
-    if (m_lastMode == FrameData::MultiChannelComplex && m_currentChannelCount > 0) {
-        // complex mode: graphs are arranged top-channels then bottom-channels
-        for (int i = 0; i < m_currentChannelCount; ++i) {
-            int topIdx = i;
-            int bottomIdx = m_currentChannelCount + i;
-            if (topIdx < m_plot->graphCount())
-                m_plot->graph(topIdx)->setData(m_xTime, m_channelData.at(i));
-            if (bottomIdx < m_plot->graphCount())
-                m_plot->graph(bottomIdx)->setData(m_xTime, m_channelData2.at(i));
+    // ── 批量 setData 覆盖（避免逐点 addData 的内存分配开销）──
+    if (m_lastMode == FrameData::MultiChannelReal) {
+        for (int i = 0; i < m_currentChannelCount && i < m_plot->graphCount(); ++i) {
+            if (i < m_channelData.size())
+                m_plot->graph(i)->setData(m_xTime, m_channelData[i], true);
         }
-    } else if (m_currentChannelCount > 0 && !m_channelData.isEmpty()) {
-        for (int i = 0; i < m_currentChannelCount; ++i) {
-            if (i < m_plot->graphCount())
-                m_plot->graph(i)->setData(m_xTime, m_channelData.at(i));
+    } else if (m_lastMode == FrameData::MultiChannelComplex) {
+        const int ch = m_currentChannelCount;
+        for (int i = 0; i < ch && i < m_plot->graphCount(); ++i) {
+            if (i < m_channelData.size())
+                m_plot->graph(i)->setData(m_xTime, m_channelData[i], true);
         }
-    } else {
-        // 如果没有数据，显示空图
-        if (m_plot->graphCount() == 0) {
-            // 至少有一个空图
-            m_plot->addGraph();
+        for (int i = 0; i < ch; ++i) {
+            const int bottomIdx = ch + i;
+            if (bottomIdx < m_plot->graphCount() && i < m_channelData2.size())
+                m_plot->graph(bottomIdx)->setData(m_xTime, m_channelData2[i], true);
         }
     }
 
-    // 自动调整X轴（显示最近10秒）
+    // ── 更新坐标轴范围 ───────────────────────────────────────
     if (!m_xTime.isEmpty()) {
-        qint64 latestTime = m_xTime.last();
+        double latestTime = m_xTime.last();
         if (m_lastMode == FrameData::MultiChannelComplex) {
             for (auto rect : m_axisRects) {
-                if (!rect) continue;
-                if (auto axis = rect->axis(QCPAxis::atBottom)) {
-                    axis->setRange(latestTime - 10000, latestTime);
-                }
+                if (rect && rect->axis(QCPAxis::atBottom))
+                    rect->axis(QCPAxis::atBottom)->setRange(latestTime - 10000, latestTime);
             }
         } else {
-            if (m_plot && m_plot->xAxis) {
+            if (m_plot->xAxis)
                 m_plot->xAxis->setRange(latestTime - 10000, latestTime);
-            }
         }
     }
 
-    // 高效重绘（排队重绘，避免UI阻塞）
+    // 排队重绘，避免在同一事件循环内多次渲染
     m_plot->replot(QCustomPlot::rpQueuedReplot);
 }
 
@@ -319,6 +293,7 @@ void PlotWindow::setupComplexLayout(int channelCount)
         qDebug() << "[setupComplexLayout] 布局已清空";
         
         m_axisRects.clear();
+        m_complexTopLegend = nullptr; // 旧图例随 layout clear 一起被销毁
 
         // 创建上下两个轴矩形
         qDebug() << "[setupComplexLayout] 创建轴矩形...";
@@ -368,19 +343,33 @@ void PlotWindow::setupComplexLayout(int channelCount)
                 continue;
             }
             QColor color = QColor::fromHsv((i * 36) % 360, 200, 200);
-            gTop->setPen(QPen(color, 2));
-            gBottom->setPen(QPen(color, 2));
+            gTop->setPen(QPen(color, 1));
+            gBottom->setPen(QPen(color, 1));
+            gTop->setSmooth(0);
+            gBottom->setSmooth(0);
             gTop->setName(QString("Ch%1(R)").arg(i + 1));
             gBottom->setName(QString("Ch%1(I)").arg(i + 1));
             qDebug() << "[setupComplexLayout] 通道" << i << "图形创建完成";
         }
         qDebug() << "[setupComplexLayout] 所有通道曲线创建完成";
 
-        // Legend: 为复杂模式配置图例交互
+        // Legend: 在 topRect 的 inset layout 中放置独立图例
+        // 注意：m_plot->legend 在 plotLayout()->clear() 后已成悬空指针，不能使用
         qDebug() << "[setupComplexLayout] 配置图例...";
-        m_plot->legend->setVisible(true);
-        m_plot->legend->setFont(QFont("Microsoft YaHei", 9));
-        m_plot->legend->setSelectableParts(QCPLegend::spItems); // 允许选择图例项
+        QCPLegend* topLegend = new QCPLegend;
+        topRect->insetLayout()->addElement(topLegend, Qt::AlignRight | Qt::AlignTop);
+        topLegend->setLayer("legend");
+        topLegend->setFont(QFont("Microsoft YaHei", 9));
+        topLegend->setSelectableParts(QCPLegend::spItems);
+        topLegend->setVisible(true);
+        // 将图形加入顶部图例（图形名称已在 setName 时设置）
+        for (int i = 0; i < m_plot->graphCount(); ++i) {
+            QCPGraph* g = m_plot->graph(i);
+            if (g && g->valueAxis() == topRect->axis(QCPAxis::atLeft)) {
+                topLegend->addItem(new QCPPlottableLegendItem(topLegend, g));
+            }
+        }
+        m_complexTopLegend = topLegend;
         qDebug() << "[setupComplexLayout] 图例配置完成";
 
         // ensure channel data containers have proper size
@@ -391,10 +380,10 @@ void PlotWindow::setupComplexLayout(int channelCount)
         m_channelData2.resize(channelCount);
         // 预分配每通道数据以避免反复重分配
         for (auto &vec : m_channelData) {
-            vec.reserve(MAX_PLOT_POINTS);
+            vec.reserve(m_baseMaxPlotPoints);
         }
         for (auto &vec : m_channelData2) {
-            vec.reserve(MAX_PLOT_POINTS);
+            vec.reserve(m_baseMaxPlotPoints);
         }
         qDebug() << "[setupComplexLayout] 数据容器已调整，大小=" << channelCount;
         
@@ -409,9 +398,13 @@ void PlotWindow::setupComplexLayout(int channelCount)
 void PlotWindow::onViewTypeChanged(int index)
 {
     m_complexViewType = static_cast<ComplexViewType>(index);
-    // 清空已有数据，以便下一次 updatePlotData 重新计算
-    for (auto &vec : m_channelData) vec.clear();
-    for (auto &vec : m_channelData2) vec.clear();
+    // 清空所有 graph 数据，以便下一次 updatePlotData 用新变换重新填充
+    m_xTime.clear();
+    for (int i = 0; i < m_plot->graphCount(); ++i)
+        m_plot->graph(i)->data()->clear();
+    m_channelData.clear();
+    m_channelData2.clear();
+    m_plot->replot(QCustomPlot::rpQueuedReplot);
 }
 
 void PlotWindow::onLegendClick(QCPLegend* legend, QCPAbstractLegendItem* item, QMouseEvent* event)

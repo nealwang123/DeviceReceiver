@@ -6,7 +6,7 @@
 
 // 前置声明，减少头文件依赖
 class DataCacheManager;
-class SerialReceiver;
+class IReceiverBackend;
 class PlotWindow;
 class DataProcessor;
 class AppConfig;
@@ -58,6 +58,9 @@ public:
      * @brief 停止应用（停止数据接收，准备退出）
      */
     void stop();
+    void pauseAcquisition();
+    void resumeAcquisition();
+    bool isPaused() const { return m_isPaused; }
     
     /**
      * @brief 获取绘图窗口指针（用于向后兼容）
@@ -88,6 +91,12 @@ public:
      * @brief 将指令转发到串口模块（线程安全，使用QueuedConnection）
      */
     void sendCommand(const QString& command, bool isHex = false);
+    void reloadRuntimeConfig();
+    bool exportCacheToFile(const QString& filePath,
+                           const QString& format,
+                           qint64 startTimeMs,
+                           qint64 endTimeMs,
+                           QString* errorMessage = nullptr);
 
 signals:
     /**
@@ -100,6 +109,7 @@ signals:
      * @brief 应用停止信号
      */
     void stopped();
+    void paused(bool paused);
 
 private:
     /**
@@ -112,7 +122,7 @@ private:
      * @brief 初始化串口接收模块
      * @return 初始化是否成功
      */
-    bool initSerialReceiver();
+    bool initReceiverBackend();
     
     /**
      * @brief 初始化数据处理模块
@@ -137,6 +147,7 @@ private:
      * @return 初始化是否成功
      */
     bool initMainWindow();
+    void connectReceiverToMainWindow();
     
     /**
      * @brief 清理所有资源
@@ -145,15 +156,17 @@ private:
 
 private:
     bool m_isRunning = false;
+    bool m_isPaused = false;
     
     // 核心模块实例
     DataCacheManager* m_cacheManager = nullptr;
     QScopedPointer<QThread> m_serialThread;
-    QScopedPointer<SerialReceiver> m_serialReceiver;
+    QScopedPointer<IReceiverBackend> m_serialReceiver;
     QScopedPointer<PlotWindow> m_plotWindow;  // 向后兼容的默认窗口
     QScopedPointer<DataProcessor> m_dataProcessor;
     PlotWindowManager* m_plotWindowManager = nullptr;  // 绘图窗口管理器
     QScopedPointer<MainWindow> m_mainWindow;  // 主界面窗口
+    QString m_activeBackendType = "serial";
     
     // 配置参数（后续可迁移到AppConfig类）
     struct {
@@ -161,10 +174,14 @@ private:
         qint64 expireTimeMs = 60000;     // 数据过期时间（毫秒）
         QString serialPort = "COM3";     // 串口端口
         int baudRate = 115200;           // 波特率
+        QString backendType = "serial"; // serial/grpc
+        QString grpcEndpoint = "127.0.0.1:50051";
         bool useMockData = true;         // 是否使用模拟数据
         int mockDataIntervalMs = 100;    // 模拟数据间隔（毫秒）
         int initialWindowCount = 1;      // 初始窗口数量
         PlotType initialWindowType = CombinedPlot; // 初始窗口类型
+        QString defaultExportDirectory = "exports";
+        QString defaultExportFormat = "hdf5";
     } m_config;
 };
 

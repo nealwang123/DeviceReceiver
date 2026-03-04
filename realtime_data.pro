@@ -12,6 +12,104 @@ CONFIG += console
 # CONFIG += wasm  # 不要在此硬编码！WASM构建时由 wasm_build.bat 通过 qmake CONFIG+=wasm 传入
 greaterThan(QT_MAJOR_VERSION, 4): QT += widgets
 
+# 可选HDF5支持（启用方式：qmake CONFIG+=hdf5 HAS_HDF5=1）
+hdf5 {
+    DEFINES += HAS_HDF5
+    !isEmpty(HDF5_ROOT) {
+        INCLUDEPATH += $$HDF5_ROOT/include
+        LIBS += -L$$HDF5_ROOT/lib -lhdf5
+    }
+}
+
+# 可选 gRPC Client 支持
+#   启用方式：qmake CONFIG+=grpc_client GRPC_ROOT=<grpc安装根目录>
+#   例：qmake CONFIG+=grpc_client GRPC_ROOT=C:/grpc
+grpc_client {
+    DEFINES += HAS_GRPC
+
+    # Proto 文件目录 & 生成代码输出目录
+    PROTO_GENERATED = $$PWD/proto/generated
+
+    # 将生成代码目录加入头文件搜索路径
+    INCLUDEPATH += $$PROTO_GENERATED
+
+    # 直接引用由构建脚本 [Prebuild] 步骤（protoc）预生成的 C++ 文件
+    # qmake/nmake 不再调用 protoc，避免路径和 PATH 问题
+    SOURCES += $$PROTO_GENERATED/device_data.pb.cc \
+               $$PROTO_GENERATED/device_data.grpc.pb.cc
+    HEADERS += $$PROTO_GENERATED/device_data.pb.h \
+               $$PROTO_GENERATED/device_data.grpc.pb.h
+
+    # ---- 库链接（分平台）----
+    !isEmpty(GRPC_ROOT) {
+        INCLUDEPATH += $$GRPC_ROOT/include
+
+        win32 {
+            # Windows（MSVC / MinGW）— vcpkg x64-windows
+            LIBS += -L$$GRPC_ROOT/lib \
+                    -lgrpc++ \
+                    -lgrpc \
+                    -lgpr \
+                    -lupb_base_lib \
+                    -lupb_hash_lib \
+                    -lupb_json_lib \
+                    -lupb_lex_lib \
+                    -lupb_mem_lib \
+                    -lupb_message_lib \
+                    -lupb_mini_descriptor_lib \
+                    -lupb_mini_table_lib \
+                    -lupb_reflection_lib \
+                    -lupb_textformat_lib \
+                    -lupb_wire_lib \
+                    -llibupb \
+                    -laddress_sorting \
+                    -lre2 \
+                    -lutf8_range \
+                    -lutf8_validity \
+                    -labseil_dll \
+                    -labsl_flags_commandlineflag \
+                    -labsl_flags_commandlineflag_internal \
+                    -labsl_flags_config \
+                    -labsl_flags_internal \
+                    -labsl_flags_marshalling \
+                    -labsl_flags_parse \
+                    -labsl_flags_private_handle_accessor \
+                    -labsl_flags_program_name \
+                    -labsl_flags_reflection \
+                    -labsl_flags_usage \
+                    -labsl_flags_usage_internal \
+                    -lcares \
+                    -lzlib \
+                    -llibprotobuf \
+                    -llibssl \
+                    -llibcrypto \
+                    -lws2_32 \
+                    -lcrypt32
+        }
+
+        unix:!macx {
+            # Linux
+            LIBS += -L$$GRPC_ROOT/lib \
+                    -lgrpc++ \
+                    -lgrpc \
+                    -lprotobuf \
+                    -lpthread \
+                    -ldl
+        }
+
+        macx {
+            # macOS
+            LIBS += -L$$GRPC_ROOT/lib \
+                    -lgrpc++ \
+                    -lgrpc \
+                    -lprotobuf \
+                    -lpthread
+        }
+    }
+
+    message("gRPC 支持已启用，GRPC_ROOT = $$GRPC_ROOT")
+}
+
 # 为C++代码定义编译宏，方便代码中做条件判断
 wasm {
     DEFINES += QT_COMPILE_FOR_WASM
@@ -119,7 +217,9 @@ include( $$PWD/3rd_qcustomplot/3rd_qcustomplot/3rd_qcustomplot.pri )
 # 源文件列表
 SOURCES += main.cpp \
            DataCacheManager.cpp \
+           DataExporter.cpp \
            SerialReceiver.cpp \
+           GrpcReceiverBackend.cpp \
            PlotWindow.cpp \
            PlotWindowBase.cpp \
            HeatMapPlotWindow.cpp \
@@ -133,7 +233,10 @@ SOURCES += main.cpp \
 # 头文件列表
 HEADERS += FrameData.h \
            DataCacheManager.h \
+           DataExporter.h \
+           IReceiverBackend.h \
            SerialReceiver.h \
+           GrpcReceiverBackend.h \
            PlotWindow.h \
            PlotWindowBase.h \
            HeatMapPlotWindow.h \

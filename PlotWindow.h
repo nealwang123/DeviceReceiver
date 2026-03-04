@@ -31,6 +31,7 @@ public slots:
 private:
     void initPlot();                // 初始化绘图配置
     void updatePlotData(const QVector<FrameData>& frames); // 更新绘图数据
+    int effectiveMaxPlotPoints() const;
 
     // 辅助布局
     void setupComplexLayout(int channelCount);
@@ -50,7 +51,7 @@ private:
     QVector<QVector<double>> m_channelData; // 每通道的 y 数据（多通道模式）
     QVector<QVector<double>> m_channelData2; // 复杂模式底部图的数据
     int m_currentChannelCount = 0;
-    const int MAX_PLOT_POINTS = 1000;// 最大绘图点数（避免卡顿）
+    int m_baseMaxPlotPoints = 1000;  // 基础最大绘图点数
 
     // 复数视图类型
     enum ComplexViewType { RealImag = 0, MagPhase = 1 };
@@ -61,6 +62,9 @@ private:
 
     // 复杂模式时使用的轴矩形（top/bottom）
     QVector<QCPAxisRect*> m_axisRects;
+
+    // 复杂模式下 topRect 使用的独立图例（m_plot->legend 在 clear() 后失效，不可用）
+    QCPLegend* m_complexTopLegend = nullptr;
 
     // 上一个检测模式，用于重建布局
     FrameData::DetectionMode m_lastMode = FrameData::Legacy;

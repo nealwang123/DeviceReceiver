@@ -1,6 +1,9 @@
 #include "ApplicationController.h"
 #include "DataCacheManager.h"
+#include "DataExporter.h"
+#include "IReceiverBackend.h"
 #include "SerialReceiver.h"
+#include "GrpcReceiverBackend.h"
 #include "PlotWindow.h"
 #include "PlotWindowManager.h"
 #include "DataProcessor.h"
@@ -12,6 +15,7 @@
 #include <QDebug>
 #include <QMessageBox>
 #include <QPushButton>
+#include <QDir>
 
 ApplicationController::ApplicationController(QObject *parent)
     : QObject(parent)
@@ -20,18 +24,8 @@ ApplicationController::ApplicationController(QObject *parent)
 {
     try {
         qDebug() << "[ApplicationController] 构造函数开始";
-        
-        // 加载配置
-        AppConfig* config = AppConfig::instance();
-        if (config) {
-            m_config.maxCacheSize = config->maxCacheSize();
-            m_config.expireTimeMs = config->expireTimeMs();
-            m_config.serialPort = config->serialPort();
-            m_config.baudRate = config->baudRate();
-            m_config.useMockData = config->useMockData();
-            m_config.mockDataIntervalMs = config->mockDataIntervalMs();
-            qDebug() << "[ApplicationController] 配置加载完成";
-        }
+
+        reloadRuntimeConfig();
         qDebug() << "[ApplicationController] 构造函数结束";
     } catch (const std::exception& e) {
         qCritical() << "[ApplicationController] 构造函数异常:" << e.what();
@@ -40,6 +34,29 @@ ApplicationController::ApplicationController(QObject *parent)
         qCritical() << "[ApplicationController] 构造函数未知异常";
         throw;
     }
+}
+
+void ApplicationController::reloadRuntimeConfig()
+{
+    AppConfig* config = AppConfig::instance();
+    if (!config) {
+        return;
+    }
+
+    m_config.maxCacheSize = config->maxCacheSize();
+    m_config.expireTimeMs = config->expireTimeMs();
+    m_config.serialPort = config->serialPort();
+    m_config.baudRate = config->baudRate();
+    m_config.backendType = config->receiverBackendType().trimmed().toLower();
+    if (m_config.backendType.isEmpty()) {
+        m_config.backendType = "grpc";
+    }
+    m_config.grpcEndpoint = config->grpcEndpoint();
+    m_config.useMockData = config->useMockData();
+    m_config.mockDataIntervalMs = config->mockDataIntervalMs();
+    m_config.defaultExportDirectory = config->defaultExportDirectory();
+    m_config.defaultExportFormat = config->defaultExportFormat();
+    qDebug() << "[ApplicationController] 配置加载完成，backend=" << m_config.backendType;
 }
 
 ApplicationController::~ApplicationController()
@@ -59,8 +76,8 @@ bool ApplicationController::initialize()
         return false;
     }
     
-    if (!initSerialReceiver()) {
-        qCritical() << "初始化串口接收模块失败";
+    if (!initReceiverBackend()) {
+        qCritical() << "初始化接收后端失败";
         return false;
     }
     
@@ -92,6 +109,8 @@ void ApplicationController::start()
         return;
     }
     
+    reloadRuntimeConfig();
+
 #ifdef QT_COMPILE_FOR_WASM
     // WebAssembly环境下强制使用模拟数据，因为没有真实串口
     m_config.useMockData = true;
@@ -99,8 +118,16 @@ void ApplicationController::start()
 #endif
     
     // 确保串口线程在运行状态
-    if (m_serialThread && !m_serialThread->isRunning()) {
-        qInfo() << "串口线程未运行，重新启动线程";
+    if (m_config.backendType.compare(m_activeBackendType, Qt::CaseInsensitive) != 0) {
+        qInfo() << "检测到后端类型变化，重建接收后端:" << m_activeBackendType << "->" << m_config.backendType;
+        if (!initReceiverBackend()) {
+            qCritical() << "重建接收后端失败";
+            emit started(false);
+            return;
+        }
+        connectReceiverToMainWindow();
+    } else if (m_serialThread && !m_serialThread->isRunning()) {
+        qInfo() << "接收线程未运行，重新启动线程";
         m_serialThread->start();
     }
     
@@ -112,32 +139,52 @@ void ApplicationController::start()
     // 启动数据接收，支持重试/切换到模拟数据
     bool startedReceiving = false;
     if (m_serialReceiver) {
-        if (m_config.useMockData) {
-            QMetaObject::invokeMethod(m_serialReceiver.get(), "startMockData",
+        m_isPaused = false;
+        const bool isGrpcBackend = (m_config.backendType.compare("grpc", Qt::CaseInsensitive) == 0);
+
+        if (isGrpcBackend) {
+            QMetaObject::invokeMethod(m_serialReceiver.get(), "setMockMode",
+                                      Qt::BlockingQueuedConnection,
+                                      Q_ARG(bool, m_config.useMockData));
+        }
+
+        if (m_config.useMockData && !isGrpcBackend) {
+            QMetaObject::invokeMethod(m_serialReceiver.get(), "startAcquisition",
                                       Qt::QueuedConnection,
                                       Q_ARG(int, m_config.mockDataIntervalMs));
             qInfo() << "已启动模拟数据，间隔" << m_config.mockDataIntervalMs << "ms";
             startedReceiving = true;
         } else {
-            // 尝试打开真实串口，允许用户重试或切换到模拟数据
+            // 尝试连接接收后端，允许用户重试或切换到模拟数据
             while (true) {
-                bool opened = false;
-                QMetaObject::invokeMethod(m_serialReceiver.get(), "openSerial",
-                                          Qt::BlockingQueuedConnection,
-                                          Q_RETURN_ARG(bool, opened),
-                                          Q_ARG(QString, m_config.serialPort),
-                                          Q_ARG(int, m_config.baudRate));
+                bool connected = false;
+                QString endpoint;
+                if (isGrpcBackend) {
+                    endpoint = m_config.grpcEndpoint;
+                } else {
+                    endpoint = QString("%1|%2").arg(m_config.serialPort).arg(m_config.baudRate);
+                }
 
-                if (opened) {
-                    qInfo() << "已打开串口" << m_config.serialPort << "，波特率" << m_config.baudRate;
+                QMetaObject::invokeMethod(m_serialReceiver.get(), "connectBackend",
+                                          Qt::BlockingQueuedConnection,
+                                          Q_RETURN_ARG(bool, connected),
+                                          Q_ARG(QString, endpoint));
+
+                if (connected) {
+                    qInfo() << "后端连接成功" << m_config.backendType << endpoint;
+                    if (m_config.useMockData || isGrpcBackend) {
+                        QMetaObject::invokeMethod(m_serialReceiver.get(), "startAcquisition",
+                                                  Qt::QueuedConnection,
+                                                  Q_ARG(int, m_config.mockDataIntervalMs));
+                    }
                     startedReceiving = true;
                     break;
                 }
 
                 // 打开失败，询问用户操作
                 QMessageBox msgBox;
-                msgBox.setWindowTitle("串口打开失败");
-                msgBox.setText(QString("无法打开串口 %1 (波特率 %2)").arg(m_config.serialPort).arg(m_config.baudRate));
+                msgBox.setWindowTitle("后端连接失败");
+                msgBox.setText(QString("无法连接后端 %1").arg(endpoint));
                 msgBox.setInformativeText("请选择重试、使用模拟数据或取消。");
                 QPushButton* retryBtn = msgBox.addButton("重试", QMessageBox::AcceptRole);
                 QPushButton* mockBtn = msgBox.addButton("使用模拟数据", QMessageBox::DestructiveRole);
@@ -149,7 +196,20 @@ void ApplicationController::start()
                 } else if (msgBox.clickedButton() == mockBtn) {
                     // 切换为模拟数据
                     m_config.useMockData = true;
-                    QMetaObject::invokeMethod(m_serialReceiver.get(), "startMockData",
+                    if (isGrpcBackend) {
+                        QMetaObject::invokeMethod(m_serialReceiver.get(), "setMockMode",
+                                                  Qt::BlockingQueuedConnection,
+                                                  Q_ARG(bool, true));
+                        bool connectedMock = false;
+                        QMetaObject::invokeMethod(m_serialReceiver.get(), "connectBackend",
+                                                  Qt::BlockingQueuedConnection,
+                                                  Q_RETURN_ARG(bool, connectedMock),
+                                                  Q_ARG(QString, m_config.grpcEndpoint));
+                        if (!connectedMock) {
+                            continue;
+                        }
+                    }
+                    QMetaObject::invokeMethod(m_serialReceiver.get(), "startAcquisition",
                                               Qt::QueuedConnection,
                                               Q_ARG(int, m_config.mockDataIntervalMs));
                     qInfo() << "切换到模拟数据，间隔" << m_config.mockDataIntervalMs << "ms";
@@ -157,7 +217,7 @@ void ApplicationController::start()
                     break;
                 } else {
                     // 取消，放弃启动数据接收
-                    qInfo() << "用户取消串口打开，放弃启动数据接收";
+                    qInfo() << "用户取消后端连接，放弃启动数据接收";
                     startedReceiving = false;
                     break;
                 }
@@ -188,9 +248,14 @@ void ApplicationController::stop()
     
     // 停止数据接收，但保持线程运行以便重新连接
     if (m_serialReceiver) {
-        QMetaObject::invokeMethod(m_serialReceiver.get(), "closeSerial",
+        QMetaObject::invokeMethod(m_serialReceiver.get(), "stopAcquisition",
+                      Qt::BlockingQueuedConnection);
+        QMetaObject::invokeMethod(m_serialReceiver.get(), "disconnectBackend",
                                   Qt::BlockingQueuedConnection);
-        qInfo() << "串口已关闭，串口接收器线程保持运行";
+        QMetaObject::invokeMethod(m_serialReceiver.get(), "setPaused",
+                                  Qt::BlockingQueuedConnection,
+                                  Q_ARG(bool, false));
+        qInfo() << "接收后端已停止，接收线程保持运行";
     }
     
     // 不再停止串口线程，保持运行以便重新连接
@@ -212,6 +277,7 @@ void ApplicationController::stop()
     }
     
     m_isRunning = false;
+    m_isPaused = false;
     qInfo() << "应用已停止";
     
     // 发射停止信号
@@ -242,12 +308,29 @@ bool ApplicationController::initCacheManager()
     return true;
 }
 
-bool ApplicationController::initSerialReceiver()
+bool ApplicationController::initReceiverBackend()
 {
-    // 创建串口接收对象
-    m_serialReceiver.reset(new SerialReceiver);
+    if (m_serialReceiver) {
+        if (m_serialThread && m_serialThread->isRunning()) {
+            QMetaObject::invokeMethod(m_serialReceiver.get(), "stopAcquisition",
+                                      Qt::BlockingQueuedConnection);
+            QMetaObject::invokeMethod(m_serialReceiver.get(), "disconnectBackend",
+                                      Qt::BlockingQueuedConnection);
+            m_serialThread->quit();
+            m_serialThread->wait(3000);
+        }
+        m_serialReceiver.reset();
+        m_serialThread.reset();
+    }
+
+    const QString backendType = m_config.backendType.trimmed().toLower();
+    if (m_config.backendType.compare("grpc", Qt::CaseInsensitive) == 0) {
+        m_serialReceiver.reset(new GrpcReceiverBackend);
+    } else {
+        m_serialReceiver.reset(new SerialReceiver);
+    }
     if (!m_serialReceiver) {
-        qCritical() << "创建串口接收器失败";
+        qCritical() << "创建接收后端失败";
         return false;
     }
     
@@ -255,8 +338,16 @@ bool ApplicationController::initSerialReceiver()
     m_serialThread.reset(new QThread);
     m_serialReceiver->moveToThread(m_serialThread.get());
     m_serialThread->start();
-    
-    qInfo() << "串口接收模块已初始化，运行在独立线程";
+
+    QObject::connect(m_serialReceiver.get(), &IReceiverBackend::frameReceived,
+                     this, [this](const FrameData& frame) {
+                         if (m_cacheManager) {
+                             m_cacheManager->addFrame(frame);
+                         }
+                     }, Qt::DirectConnection);
+
+    m_activeBackendType = backendType;
+    qInfo() << "接收后端已初始化，运行在独立线程，类型=" << m_activeBackendType;
     return true;
 }
 
@@ -350,15 +441,7 @@ bool ApplicationController::initMainWindow()
     // 初始化主窗口界面
     m_mainWindow->initialize();
     
-    // 将串口模块的信号连接到主窗口用于显示与错误提示（跨线程使用QueuedConnection）
-    if (m_serialReceiver && m_mainWindow) {
-        QObject::connect(m_serialReceiver.get(), &SerialReceiver::dataReceived,
-                         m_mainWindow.get(), &MainWindow::onDataReceived, Qt::QueuedConnection);
-        QObject::connect(m_serialReceiver.get(), &SerialReceiver::commandSent,
-                         m_mainWindow.get(), &MainWindow::onCommandSent, Qt::QueuedConnection);
-        QObject::connect(m_serialReceiver.get(), &SerialReceiver::commandError,
-                         m_mainWindow.get(), &MainWindow::onCommandError, Qt::QueuedConnection);
-    }
+    connectReceiverToMainWindow();
     
     // 连接应用控制器信号到主窗口的更新连接状态
     if (m_mainWindow) {
@@ -375,6 +458,22 @@ bool ApplicationController::initMainWindow()
     return true;
 }
 
+void ApplicationController::connectReceiverToMainWindow()
+{
+    if (!m_serialReceiver || !m_mainWindow) {
+        return;
+    }
+
+    QObject::connect(m_serialReceiver.get(), &IReceiverBackend::dataReceived,
+                     m_mainWindow.get(), &MainWindow::onDataReceived, Qt::QueuedConnection);
+    QObject::connect(m_serialReceiver.get(), &IReceiverBackend::commandSent,
+                     m_mainWindow.get(), &MainWindow::onCommandSent, Qt::QueuedConnection);
+    QObject::connect(m_serialReceiver.get(), &IReceiverBackend::commandError,
+                     m_mainWindow.get(), &MainWindow::onCommandError, Qt::QueuedConnection);
+    QObject::connect(m_serialReceiver.get(), &IReceiverBackend::connectionStateChanged,
+                     m_mainWindow.get(), &MainWindow::updateConnectionStatus, Qt::QueuedConnection);
+}
+
 void ApplicationController::sendCommand(const QString& command, bool isHex)
 {
     if (!m_serialReceiver) {
@@ -387,6 +486,72 @@ void ApplicationController::sendCommand(const QString& command, bool isHex)
                               Qt::QueuedConnection,
                               Q_ARG(QString, command),
                               Q_ARG(bool, isHex));
+}
+
+void ApplicationController::pauseAcquisition()
+{
+    if (!m_serialReceiver) {
+        return;
+    }
+
+    QMetaObject::invokeMethod(m_serialReceiver.get(), "setPaused",
+                              Qt::BlockingQueuedConnection,
+                              Q_ARG(bool, true));
+    m_isPaused = true;
+    emit paused(true);
+}
+
+void ApplicationController::resumeAcquisition()
+{
+    if (!m_serialReceiver) {
+        return;
+    }
+
+    QMetaObject::invokeMethod(m_serialReceiver.get(), "setPaused",
+                              Qt::BlockingQueuedConnection,
+                              Q_ARG(bool, false));
+    if (m_isRunning && (m_config.useMockData || m_config.backendType.compare("grpc", Qt::CaseInsensitive) == 0)) {
+        QMetaObject::invokeMethod(m_serialReceiver.get(), "startAcquisition",
+                                  Qt::QueuedConnection,
+                                  Q_ARG(int, m_config.mockDataIntervalMs));
+    }
+    m_isPaused = false;
+    emit paused(false);
+}
+
+bool ApplicationController::exportCacheToFile(const QString& filePath,
+                                              const QString& format,
+                                              qint64 startTimeMs,
+                                              qint64 endTimeMs,
+                                              QString* errorMessage)
+{
+    if (!m_cacheManager) {
+        if (errorMessage) {
+            *errorMessage = "缓存管理器未初始化";
+        }
+        return false;
+    }
+
+    QVector<FrameData> frames;
+    if (startTimeMs > 0 && endTimeMs > 0 && endTimeMs >= startTimeMs) {
+        frames = m_cacheManager->getFramesInTimeRange(startTimeMs, endTimeMs);
+    } else {
+        frames = m_cacheManager->getAllFrames();
+    }
+
+    DataExporter::Format exportFormat = DataExporter::Format::Csv;
+    QString formatLower = format.toLower();
+    if (formatLower == "hdf5" || formatLower == "h5") {
+        exportFormat = DataExporter::Format::Hdf5;
+    }
+
+    DataExporter::ExportOptions options;
+    options.filePath = filePath;
+    options.sourceTag = m_config.useMockData ? "mock" : "device";
+    options.startTimeMs = startTimeMs;
+    options.endTimeMs = endTimeMs;
+
+    return DataExporter::exportFrames(frames, exportFormat, options, errorMessage);
 }
 
 PlotWindowManager* ApplicationController::plotWindowManager() const
@@ -429,6 +594,10 @@ void ApplicationController::cleanup()
     m_serialReceiver.reset();
     
     // 销毁线程
+    if (m_serialThread && m_serialThread->isRunning()) {
+        m_serialThread->quit();
+        m_serialThread->wait(3000);
+    }
     m_serialThread.reset();
     
     // 清理绘图窗口管理器（单例，由管理器自身管理销毁）
