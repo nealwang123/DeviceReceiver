@@ -1,0 +1,52 @@
+# ===== Qt / qmake build outputs =====
+build/
+debug/
+release/
+build-*/
+**/temp/
+
+# ===== Compiled binaries and objects =====
+*.o
+*.obj
+*.a
+*.lib
+*.so
+*.dll
+*.dylib
+*.exe
+*.exp
+*.idb
+*.ilk
+*.pdb
+*.manifest
+
+# ===== Qt generated files =====
+moc_*.cpp
+moc_*.h
+qrc_*.cpp
+ui_*.h
+*.moc
+*.qmake.stash
+*.pro.user
+*.pro.user.*
+*.autosave
+
+# ===== CMake / tooling cache =====
+CMakeCache.txt
+CMakeFiles/
+cmake-build-*/
+
+# ===== Runtime logs / exports =====
+realtime_data.log
+exports/
+*.log
+
+# ===== Python cache =====
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+proto/generated_py/__pycache__/
+
+# ===== Editor =====
+.vscode/

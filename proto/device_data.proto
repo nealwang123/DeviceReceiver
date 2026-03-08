@@ -1,0 +1,45 @@
+syntax = "proto3";
+
+package device_data;
+
+// ============================================================
+// 设备实时数据服务
+//   - Subscribe : 服务端流式 RPC，持续推送 DataFrame
+//   - SendCommand: 一元 RPC，发送控制指令并等待响应
+// ============================================================
+service DeviceDataService {
+    // 订阅实时数据流（Server-Streaming）
+    rpc Subscribe(SubscribeRequest) returns (stream DataFrame);
+
+    // 发送控制指令
+    rpc SendCommand(CommandRequest) returns (CommandResponse);
+}
+
+// ---- 订阅请求 --------------------------------------------
+message SubscribeRequest {
+    uint32 channel_count = 1;  // 期望通道数，0 = 服务端全量推送
+    uint32 interval_ms   = 2;  // 建议帧间隔（毫秒），服务端可忽略
+}
+
+// ---- 数据帧（对应客户端 FrameData 结构体）---------------
+message DataFrame {
+    uint64 timestamp     = 1;  // 时间戳（毫秒，UTC epoch）
+    uint32 frame_id      = 2;  // 帧序号（递增，服务端维护）
+    uint32 detect_mode   = 3;  // 0=Legacy(保留)  1=MultiChannelReal(幅值/相位)  2=MultiChannelComplex(实部/虚部)
+    uint32 channel_count = 4;  // 实际通道数
+    repeated double channels_comp0 = 5;  // 通道分量0：Real模式=幅值，Complex模式=实部
+    repeated double channels_comp1 = 6;  // 通道分量1：Real模式=相位，Complex模式=虚部（与comp0按索引一一对应）
+}
+
+// ---- 指令请求 --------------------------------------------
+message CommandRequest {
+    bytes  payload    = 1;  // 原始指令字节序列
+    string command_id = 2;  // 客户端生成的唯一 ID，用于匹配响应
+}
+
+// ---- 指令响应 --------------------------------------------
+message CommandResponse {
+    bool   success    = 1;  // 指令是否被设备接受
+    string message    = 2;  // 可读信息（成功摘要 / 错误说明）
+    string command_id = 3;  // 与请求 command_id 对应
+}

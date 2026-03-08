@@ -1286,6 +1286,41 @@ void MainWindow::finalizeGrpcSelfTest()
     updateGrpcTestUiState();
 }
 
+QString MainWindow::resolveGrpcTestServerExecutablePath() const
+{
+    const QDir currentDir = QDir::current();
+    const QDir appDir(QCoreApplication::applicationDirPath());
+
+    QStringList candidatePaths;
+#ifdef Q_OS_WIN
+    const QString executableName = "grpc_test_server.exe";
+#else
+    const QString executableName = "grpc_test_server";
+#endif
+
+    candidatePaths << currentDir.filePath(executableName)
+                   << currentDir.filePath("build/release/" + executableName)
+                   << currentDir.filePath("build/debug/" + executableName)
+                   << currentDir.filePath("dist/" + executableName)
+                   << appDir.filePath(executableName)
+                   << appDir.filePath("../" + executableName)
+                   << appDir.filePath("../../" + executableName)
+                   << appDir.filePath("../release/" + executableName)
+                   << appDir.filePath("../debug/" + executableName)
+                   << appDir.filePath("../../build/release/" + executableName)
+                   << appDir.filePath("../../build/debug/" + executableName)
+                   << appDir.filePath("../../dist/" + executableName);
+
+    for (const QString& path : candidatePaths) {
+        QFileInfo fileInfo(QDir::cleanPath(path));
+        if (fileInfo.exists() && fileInfo.isFile()) {
+            return fileInfo.absoluteFilePath();
+        }
+    }
+
+    return QString();
+}
+
 QString MainWindow::resolveGrpcTestServerScriptPath() const
 {
     QStringList candidatePaths;
@@ -1295,6 +1330,49 @@ QString MainWindow::resolveGrpcTestServerScriptPath() const
     candidatePaths << appDir.filePath("grpc_test_server.py")
                    << appDir.filePath("../grpc_test_server.py")
                    << appDir.filePath("../../grpc_test_server.py");
+
+    for (const QString& path : candidatePaths) {
+        QFileInfo fileInfo(QDir::cleanPath(path));
+        if (fileInfo.exists() && fileInfo.isFile()) {
+            return fileInfo.absoluteFilePath();
+        }
+    }
+
+    return QString();
+}
+
+QString MainWindow::resolveGrpcTestServerPythonExecutablePath(const QString& scriptPath) const
+{
+    const QFileInfo scriptInfo(scriptPath);
+    const QDir scriptDir(scriptInfo.absolutePath());
+    const QDir currentDir = QDir::current();
+    const QDir appDir(QCoreApplication::applicationDirPath());
+
+    QStringList candidatePaths;
+#ifdef Q_OS_WIN
+    const QStringList venvNames{ ".venv", "venv" };
+    for (const QString& venvName : venvNames) {
+        candidatePaths << scriptDir.filePath(venvName + "/Scripts/python.exe")
+                       << currentDir.filePath(venvName + "/Scripts/python.exe")
+                       << appDir.filePath(venvName + "/Scripts/python.exe")
+                       << appDir.filePath("../" + venvName + "/Scripts/python.exe")
+                       << appDir.filePath("../../" + venvName + "/Scripts/python.exe");
+    }
+#else
+    const QStringList venvNames{ ".venv", "venv" };
+    for (const QString& venvName : venvNames) {
+        candidatePaths << scriptDir.filePath(venvName + "/bin/python3")
+                       << scriptDir.filePath(venvName + "/bin/python")
+                       << currentDir.filePath(venvName + "/bin/python3")
+                       << currentDir.filePath(venvName + "/bin/python")
+                       << appDir.filePath(venvName + "/bin/python3")
+                       << appDir.filePath(venvName + "/bin/python")
+                       << appDir.filePath("../" + venvName + "/bin/python3")
+                       << appDir.filePath("../" + venvName + "/bin/python")
+                       << appDir.filePath("../../" + venvName + "/bin/python3")
+                       << appDir.filePath("../../" + venvName + "/bin/python");
+    }
+#endif
 
     for (const QString& path : candidatePaths) {
         QFileInfo fileInfo(QDir::cleanPath(path));
@@ -1577,7 +1655,7 @@ void MainWindow::onBackendTypeChanged(int index)
 void MainWindow::onStartGrpcTestServerClicked()
 {
 #ifdef QT_COMPILE_FOR_WASM
-    QMessageBox::information(this, "提示", "WASM 环境不支持启动本地 Python 测试服务");
+    QMessageBox::information(this, "提示", "WASM 环境不支持启动本地 gRPC 测试服务");
     return;
 #else
     if (!m_grpcTestServerProcess ||
@@ -1587,43 +1665,93 @@ void MainWindow::onStartGrpcTestServerClicked()
 
     logGrpcInteraction("test-server", "请求启动本地 gRPC 测试服务");
 
-    const QString scriptPath = resolveGrpcTestServerScriptPath();
-    if (scriptPath.isEmpty()) {
-        m_grpcTestServiceStatusLabel->setText("脚本未找到");
-        m_grpcTestServiceStatusLabel->setStyleSheet("color: red;");
-        QMessageBox::warning(this,
-                             "启动失败",
-                             "未找到 grpc_test_server.py，请确认程序运行目录包含该脚本");
-        logGrpcInteraction("test-server", "启动失败：未找到 grpc_test_server.py");
-        updateGrpcTestUiState();
-        return;
-    }
-
     const QString port = QString::number(grpcEndpointPort());
-    const QString workingDir = QFileInfo(scriptPath).absolutePath();
-    m_grpcTestServerProcess->setWorkingDirectory(workingDir);
 
     m_grpcTestServiceStatusLabel->setText("启动中...");
     m_grpcTestServiceStatusLabel->setStyleSheet("color: #c08000;");
 
-    m_grpcTestServerProcess->start("python", QStringList() << scriptPath << "--port" << port);
-    if (!m_grpcTestServerProcess->waitForStarted(1500)) {
-        const QString firstError = m_grpcTestServerProcess->errorString();
-        m_grpcTestServerProcess->start("py", QStringList() << "-3" << scriptPath << "--port" << port);
+    QStringList startErrors;
+    auto tryStartServer = [this, &startErrors](const QString& program,
+                                                const QStringList& args,
+                                                const QString& displayName,
+                                                const QString& workingDir) {
+        m_grpcTestServerProcess->setWorkingDirectory(workingDir);
+        m_grpcTestServerProcess->start(program, args);
+        if (m_grpcTestServerProcess->waitForStarted(1500)) {
+            logGrpcInteraction("test-server", QString("启动成功：%1").arg(displayName));
+            return true;
+        }
 
-        if (!m_grpcTestServerProcess->waitForStarted(1500)) {
-            m_grpcTestServiceStatusLabel->setText("启动失败");
-            m_grpcTestServiceStatusLabel->setStyleSheet("color: red;");
-            QMessageBox::warning(this,
-                                 "启动失败",
-                                 QString("无法启动本地 gRPC 测试服务。\npython错误: %1\npy错误: %2")
-                                     .arg(firstError,
-                                          m_grpcTestServerProcess->errorString()));
-            logGrpcInteraction("test-server", QString("启动失败：python错误=%1, py错误=%2")
-                                               .arg(firstError, m_grpcTestServerProcess->errorString()));
+        const QString error = m_grpcTestServerProcess->errorString();
+        startErrors << QString("%1: %2").arg(displayName, error);
+        logGrpcInteraction("test-server", QString("启动失败（%1）：%2").arg(displayName, error));
+        return false;
+    };
+
+    const QString executablePath = resolveGrpcTestServerExecutablePath();
+    if (!executablePath.isEmpty()) {
+        const QString executableWorkingDir = QFileInfo(executablePath).absolutePath();
+        logGrpcInteraction("test-server", QString("优先使用打包服务: %1").arg(executablePath));
+        if (tryStartServer(executablePath,
+                           QStringList() << "--port" << port,
+                           "grpc_test_server.exe",
+                           executableWorkingDir)) {
             updateGrpcTestUiState();
             return;
         }
+    } else {
+        logGrpcInteraction("test-server", "未找到 grpc_test_server.exe，回退到 Python 脚本模式");
+    }
+
+    const QString scriptPath = resolveGrpcTestServerScriptPath();
+    if (!scriptPath.isEmpty()) {
+        const QString scriptWorkingDir = QFileInfo(scriptPath).absolutePath();
+        const QStringList scriptArgs = QStringList() << scriptPath << "--port" << port;
+
+        const QString preferredPythonPath = resolveGrpcTestServerPythonExecutablePath(scriptPath);
+        if (!preferredPythonPath.isEmpty()) {
+            logGrpcInteraction("test-server", QString("回退到项目虚拟环境解释器: %1").arg(preferredPythonPath));
+            if (tryStartServer(preferredPythonPath,
+                               scriptArgs,
+                               "项目虚拟环境 Python",
+                               scriptWorkingDir)) {
+                updateGrpcTestUiState();
+                return;
+            }
+        }
+
+        if (tryStartServer("python",
+                           scriptArgs,
+                           "系统 Python",
+                           scriptWorkingDir)) {
+            updateGrpcTestUiState();
+            return;
+        }
+
+        if (tryStartServer("py",
+                           QStringList() << "-3" << scriptPath << "--port" << port,
+                           "py -3",
+                           scriptWorkingDir)) {
+            updateGrpcTestUiState();
+            return;
+        }
+    } else {
+        startErrors << "未找到 grpc_test_server.py（开发回退脚本）";
+        logGrpcInteraction("test-server", "未找到 grpc_test_server.py，无法执行 Python 回退启动");
+    }
+
+    if (m_grpcTestServerProcess->state() == QProcess::NotRunning) {
+        m_grpcTestServiceStatusLabel->setText("启动失败");
+        m_grpcTestServiceStatusLabel->setStyleSheet("color: red;");
+        QMessageBox::warning(this,
+                             "启动失败",
+                             QString("无法启动本地 gRPC 测试服务。\n"
+                                     "生产环境请优先提供 grpc_test_server.exe。\n\n"
+                                     "启动详情:\n%1")
+                                 .arg(startErrors.join("\n")));
+        logGrpcInteraction("test-server", QString("启动失败详情：%1").arg(startErrors.join(" | ")));
+        updateGrpcTestUiState();
+        return;
     }
 
     updateGrpcTestUiState();

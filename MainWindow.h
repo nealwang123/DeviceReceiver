@@ -195,7 +195,9 @@ private:
     void startGrpcSelfTest(bool autoTriggered);
     void handleGrpcBackendPacket(const QJsonObject& packet);
     void finalizeGrpcSelfTest();
+    QString resolveGrpcTestServerExecutablePath() const;
     QString resolveGrpcTestServerScriptPath() const;
+    QString resolveGrpcTestServerPythonExecutablePath(const QString& scriptPath) const;
     int grpcEndpointPort() const;
     void logGrpcInteraction(const QString& category, const QString& detail) const;
 

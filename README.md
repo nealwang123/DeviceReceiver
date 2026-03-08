@@ -153,6 +153,21 @@ build_and_run_fixed_cn.bat -Debug -Run
 | `build.ps1` | PowerShell构建脚本 |
 | `build_ps.ps1` | 原始PowerShell构建脚本 |
 
+#### 🧩 **`package_grpc_test_server.bat` - gRPC 测试服务打包脚本**
+
+将 `grpc_test_server.py` 打包为单文件 `grpc_test_server.exe`，供主程序“启动测试服务”按钮直接调用（生产环境推荐）。
+
+**基本用法:**
+```cmd
+package_grpc_test_server.bat
+```
+
+**输出位置:**
+- `build/release/grpc_test_server.exe`
+- 如果存在 `build/debug/`，脚本会同步复制一份到 `build/debug/grpc_test_server.exe`
+
+> 主程序优先启动 `grpc_test_server.exe`；仅在找不到 EXE 时，才回退到 Python 脚本模式（用于开发调试）。
+
 #### 🌐 **`wasm_build.bat` - WebAssembly 构建脚本**
 
 将项目编译为 WebAssembly，可在浏览器中直接运行。
@@ -192,10 +207,12 @@ git push
 build/
 ├── release/                # Release版本输出目录
 │   ├── realtime_data.exe   # 主程序
+│   ├── grpc_test_server.exe# gRPC测试服务（可选，推荐生产环境提供）
 │   ├── realtime_data.pdb   # 程序数据库文件
 │   └── realtime_data.log   # 运行日志文件
 └── debug/                  # Debug版本输出目录
     ├── realtime_data.exe
+   ├── grpc_test_server.exe
     ├── realtime_data.pdb
     └── realtime_data.log
 
