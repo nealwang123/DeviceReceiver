@@ -124,6 +124,7 @@ private slots:
     void onStopGrpcTestServerClicked();
     void onRunGrpcSelfTestClicked();
     void onGrpcSelfTestTimeout();
+    void onGrpcTestServerStartTimeout();
 
 private:
     /**
@@ -191,13 +192,41 @@ private:
      */
     void setStyle(AppConfig::Style style);
 
+    enum class GrpcLabelTone {
+        Neutral,
+        Warning,
+        Success,
+        Error,
+    };
+
+    struct GrpcLabelState {
+        QString text;
+        GrpcLabelTone tone = GrpcLabelTone::Neutral;
+    };
+
     void updateGrpcTestUiState();
+    void resetGrpcSelfTestLabelStates();
+    void setGrpcLabelState(GrpcLabelState& target, const QString& text, GrpcLabelTone tone);
+    void applyGrpcLabelState(QLabel* label, const GrpcLabelState& state) const;
+    QString grpcLabelToneColor(GrpcLabelTone tone) const;
+    void applyGrpcSelfTestLabelStates();
     void startGrpcSelfTest(bool autoTriggered);
     void handleGrpcBackendPacket(const QJsonObject& packet);
     void finalizeGrpcSelfTest();
+    void setGrpcTestServiceStatus(const QString& text, const QString& color);
     QString resolveGrpcTestServerExecutablePath() const;
     QString resolveGrpcTestServerScriptPath() const;
     QString resolveGrpcTestServerPythonExecutablePath(const QString& scriptPath) const;
+#ifndef QT_COMPILE_FOR_WASM
+    struct GrpcTestServerLaunchCandidate {
+        QString program;
+        QStringList arguments;
+        QString displayName;
+        QString workingDirectory;
+    };
+    QList<GrpcTestServerLaunchCandidate> buildGrpcTestServerLaunchCandidates(const QString& port) const;
+    void tryStartNextGrpcTestServerCandidate();
+#endif
     int grpcEndpointPort() const;
     void logGrpcInteraction(const QString& category, const QString& detail) const;
 
@@ -306,9 +335,20 @@ private:
     qint64 m_lastGrpcStreamPayloadTimestampMs;
     QStringList m_grpcSelfTestPendingAcks;
     QString m_grpcSelfTestTargetMode;
+    GrpcLabelState m_grpcSelfTestOverallState;
+    GrpcLabelState m_grpcSelfTestTxState;
+    GrpcLabelState m_grpcSelfTestRxState;
+    GrpcLabelState m_grpcModeSwitchState;
+    GrpcLabelState m_grpcPeriodicDataState;
 
 #ifndef QT_COMPILE_FOR_WASM
     QProcess* m_grpcTestServerProcess;
+    QTimer* m_grpcTestServerStartTimeoutTimer;
+    QList<GrpcTestServerLaunchCandidate> m_grpcTestServerLaunchQueue;
+    QStringList m_grpcTestServerStartErrors;
+    QString m_grpcTestServerCurrentDisplayName;
+    bool m_grpcTestServerLaunchInProgress;
+    bool m_grpcTestServerStopRequested;
 #endif
 };
 

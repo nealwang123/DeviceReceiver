@@ -72,6 +72,9 @@ MainWindow::MainWindow(ApplicationController* controller, QWidget* parent)
     , m_lastGrpcStreamPayloadTimestampMs(0)
 #ifndef QT_COMPILE_FOR_WASM
     , m_grpcTestServerProcess(nullptr)
+    , m_grpcTestServerStartTimeoutTimer(nullptr)
+    , m_grpcTestServerLaunchInProgress(false)
+    , m_grpcTestServerStopRequested(false)
 #endif
 {
     try {
@@ -89,6 +92,13 @@ MainWindow::MainWindow(ApplicationController* controller, QWidget* parent)
     #ifndef QT_COMPILE_FOR_WASM
         m_grpcTestServerProcess = new QProcess(this);
         m_grpcTestServerProcess->setProcessChannelMode(QProcess::SeparateChannels);
+        m_grpcTestServerStartTimeoutTimer = new QTimer(this);
+        m_grpcTestServerStartTimeoutTimer->setSingleShot(true);
+        m_grpcTestServerStartTimeoutTimer->setInterval(1800);
+        connect(m_grpcTestServerStartTimeoutTimer,
+                &QTimer::timeout,
+                this,
+                &MainWindow::onGrpcTestServerStartTimeout);
     #endif
         
         qDebug() << "[MainWindow] 构造函数结束";
@@ -197,26 +207,21 @@ void MainWindow::updateConnectionStatus(bool connected)
         m_resumeButton->setEnabled(false);
         m_exportButton->setEnabled(true);
 
+        const bool interruptedSelfTest = m_grpcSelfTestPending;
         m_autoSelfTestTriggeredForConnection = false;
         if (m_grpcSelfTestPending) {
             m_grpcSelfTestPending = false;
             m_grpcSelfTestTimeoutTimer->stop();
-            m_grpcSelfTestStatusLabel->setText("连接断开");
-            m_grpcSelfTestStatusLabel->setStyleSheet("color: red;");
         }
         m_grpcSelfTestCommandAcked = false;
         m_grpcSelfTestModeSwitchAcked = false;
         m_grpcSelfTestStreamReceived = false;
         m_grpcSelfTestPendingAcks.clear();
         m_grpcSelfTestTargetMode.clear();
-        m_grpcSelfTestTxStatusLabel->setText("发送(Ping): 待验证");
-        m_grpcSelfTestRxStatusLabel->setText("接收(流数据): 待验证");
-        m_grpcModeSwitchStatusLabel->setText("待验证");
-        m_grpcPeriodicDataStatusLabel->setText("待验证");
-        m_grpcSelfTestTxStatusLabel->setStyleSheet("color: gray;");
-        m_grpcSelfTestRxStatusLabel->setStyleSheet("color: gray;");
-        m_grpcModeSwitchStatusLabel->setStyleSheet("color: gray;");
-        m_grpcPeriodicDataStatusLabel->setStyleSheet("color: gray;");
+        resetGrpcSelfTestLabelStates();
+        if (interruptedSelfTest) {
+            setGrpcLabelState(m_grpcSelfTestOverallState, QStringLiteral("连接断开"), GrpcLabelTone::Error);
+        }
         m_grpcPeriodicPacketCount = 0;
         m_grpcPeriodicIntervalSumMs = 0;
         m_lastGrpcStreamPayloadTimestampMs = 0;
@@ -245,11 +250,16 @@ void MainWindow::closeEvent(QCloseEvent* event)
 {
 #ifndef QT_COMPILE_FOR_WASM
     if (m_grpcTestServerProcess && m_grpcTestServerProcess->state() != QProcess::NotRunning) {
-        m_grpcTestServerProcess->terminate();
-        if (!m_grpcTestServerProcess->waitForFinished(2000)) {
-            m_grpcTestServerProcess->kill();
-            m_grpcTestServerProcess->waitForFinished(1000);
+        m_grpcTestServerLaunchInProgress = false;
+        m_grpcTestServerStopRequested = true;
+        m_grpcTestServerLaunchQueue.clear();
+        m_grpcTestServerStartErrors.clear();
+        m_grpcTestServerCurrentDisplayName.clear();
+        if (m_grpcTestServerStartTimeoutTimer) {
+            m_grpcTestServerStartTimeoutTimer->stop();
         }
+        m_grpcTestServerProcess->terminate();
+        m_grpcTestServerProcess->kill();
     }
 #endif
 
@@ -442,15 +452,12 @@ void MainWindow::initUI()
         QHBoxLayout* grpcSelfTestLayout = new QHBoxLayout();
         grpcSelfTestLayout->addWidget(new QLabel("收发自检:"));
         m_grpcSelfTestStatusLabel = new QLabel("未执行");
-        m_grpcSelfTestStatusLabel->setStyleSheet("color: gray;");
         grpcSelfTestLayout->addWidget(m_grpcSelfTestStatusLabel);
         grpcSelfTestLayout->addStretch();
 
         QHBoxLayout* grpcResultLayout = new QHBoxLayout();
         m_grpcSelfTestTxStatusLabel = new QLabel("发送(Ping): 待验证");
         m_grpcSelfTestRxStatusLabel = new QLabel("接收(流数据): 待验证");
-        m_grpcSelfTestTxStatusLabel->setStyleSheet("color: gray;");
-        m_grpcSelfTestRxStatusLabel->setStyleSheet("color: gray;");
         grpcResultLayout->addWidget(m_grpcSelfTestTxStatusLabel);
         grpcResultLayout->addWidget(m_grpcSelfTestRxStatusLabel);
         grpcResultLayout->addStretch();
@@ -467,16 +474,17 @@ void MainWindow::initUI()
         QHBoxLayout* grpcModeStatusLayout = new QHBoxLayout();
         grpcModeStatusLayout->addWidget(new QLabel("模式切换:"));
         m_grpcModeSwitchStatusLabel = new QLabel("待验证");
-        m_grpcModeSwitchStatusLabel->setStyleSheet("color: gray;");
         grpcModeStatusLayout->addWidget(m_grpcModeSwitchStatusLabel);
         grpcModeStatusLayout->addStretch();
 
         QHBoxLayout* grpcPeriodicLayout = new QHBoxLayout();
         grpcPeriodicLayout->addWidget(new QLabel("周期数据:"));
         m_grpcPeriodicDataStatusLabel = new QLabel("待验证");
-        m_grpcPeriodicDataStatusLabel->setStyleSheet("color: gray;");
         grpcPeriodicLayout->addWidget(m_grpcPeriodicDataStatusLabel);
         grpcPeriodicLayout->addStretch();
+
+        resetGrpcSelfTestLabelStates();
+        applyGrpcSelfTestLabelStates();
 
         QHBoxLayout* grpcActionLayout = new QHBoxLayout();
         m_startGrpcTestServerButton = new QPushButton("启动测试服务");
@@ -706,19 +714,33 @@ void MainWindow::initConnections()
     connect(m_grpcSelfTestTimeoutTimer, &QTimer::timeout, this, &MainWindow::onGrpcSelfTestTimeout);
     connect(m_grpcModeCombo, QOverload<int>::of(&QComboBox::currentIndexChanged), this, [this](int) {
         if (!m_grpcSelfTestPending) {
-            m_grpcModeSwitchStatusLabel->setText("待验证");
-            m_grpcModeSwitchStatusLabel->setStyleSheet("color: gray;");
+            setGrpcLabelState(m_grpcModeSwitchState, QStringLiteral("待验证"), GrpcLabelTone::Neutral);
+            updateGrpcTestUiState();
         }
     });
 
 #ifndef QT_COMPILE_FOR_WASM
     if (m_grpcTestServerProcess) {
         connect(m_grpcTestServerProcess, &QProcess::started, this, [this]() {
-            if (m_grpcTestServiceStatusLabel) {
-                m_grpcTestServiceStatusLabel->setText("运行中");
-                m_grpcTestServiceStatusLabel->setStyleSheet("color: green;");
+            if (m_grpcTestServerStartTimeoutTimer) {
+                m_grpcTestServerStartTimeoutTimer->stop();
             }
-            logGrpcInteraction("test-server", "本地 gRPC 测试服务已启动");
+
+            const bool wasLaunchInProgress = m_grpcTestServerLaunchInProgress;
+            const QString launchDisplayName = m_grpcTestServerCurrentDisplayName;
+
+            m_grpcTestServerLaunchInProgress = false;
+            m_grpcTestServerStopRequested = false;
+            m_grpcTestServerLaunchQueue.clear();
+            m_grpcTestServerStartErrors.clear();
+            m_grpcTestServerCurrentDisplayName.clear();
+
+            setGrpcTestServiceStatus("运行中", "green");
+            if (wasLaunchInProgress && !launchDisplayName.isEmpty()) {
+                logGrpcInteraction("test-server", QString("本地 gRPC 测试服务已启动（%1）").arg(launchDisplayName));
+            } else {
+                logGrpcInteraction("test-server", "本地 gRPC 测试服务已启动");
+            }
             updateGrpcTestUiState();
         });
 
@@ -726,17 +748,40 @@ void MainWindow::initConnections()
                 QOverload<int, QProcess::ExitStatus>::of(&QProcess::finished),
                 this,
                 [this](int exitCode, QProcess::ExitStatus exitStatus) {
-                    if (m_grpcTestServiceStatusLabel) {
-                        if (exitStatus == QProcess::NormalExit) {
-                            m_grpcTestServiceStatusLabel->setText(QString("已停止(%1)").arg(exitCode));
-                            m_grpcTestServiceStatusLabel->setStyleSheet("color: gray;");
-                            logGrpcInteraction("test-server", QString("测试服务已停止，exitCode=%1").arg(exitCode));
-                        } else {
-                            m_grpcTestServiceStatusLabel->setText("异常退出");
-                            m_grpcTestServiceStatusLabel->setStyleSheet("color: red;");
-                            logGrpcInteraction("test-server", "测试服务异常退出");
-                        }
+                    if (m_grpcTestServerStartTimeoutTimer) {
+                        m_grpcTestServerStartTimeoutTimer->stop();
                     }
+
+                    const bool wasLaunchInProgress = m_grpcTestServerLaunchInProgress;
+                    const QString launchDisplayName = m_grpcTestServerCurrentDisplayName;
+
+                    if (wasLaunchInProgress && !m_grpcTestServerStopRequested) {
+                        const QString displayName = launchDisplayName.isEmpty()
+                            ? QStringLiteral("候选启动项")
+                            : launchDisplayName;
+                        const QString reason = QString("%1: 启动后立即退出，exitCode=%2")
+                            .arg(displayName)
+                            .arg(exitCode);
+                        m_grpcTestServerStartErrors << reason;
+                        logGrpcInteraction("test-server", reason);
+                        m_grpcTestServerCurrentDisplayName.clear();
+                        tryStartNextGrpcTestServerCandidate();
+                        return;
+                    }
+
+                    m_grpcTestServerLaunchInProgress = false;
+                    m_grpcTestServerLaunchQueue.clear();
+                    m_grpcTestServerCurrentDisplayName.clear();
+
+                    if (exitStatus == QProcess::NormalExit) {
+                        setGrpcTestServiceStatus(QString("已停止(%1)").arg(exitCode), "gray");
+                        logGrpcInteraction("test-server", QString("测试服务已停止，exitCode=%1").arg(exitCode));
+                    } else {
+                        setGrpcTestServiceStatus("异常退出", "red");
+                        logGrpcInteraction("test-server", "测试服务异常退出");
+                    }
+
+                    m_grpcTestServerStopRequested = false;
                     updateGrpcTestUiState();
                 });
 
@@ -744,12 +789,44 @@ void MainWindow::initConnections()
                 &QProcess::errorOccurred,
                 this,
                 [this](QProcess::ProcessError error) {
-                    Q_UNUSED(error)
-                    if (m_grpcTestServiceStatusLabel) {
-                        m_grpcTestServiceStatusLabel->setText("启动失败");
-                        m_grpcTestServiceStatusLabel->setStyleSheet("color: red;");
+                    if (m_grpcTestServerStartTimeoutTimer) {
+                        m_grpcTestServerStartTimeoutTimer->stop();
                     }
-                    logGrpcInteraction("test-server", "测试服务启动失败");
+
+                    if (m_grpcTestServerLaunchInProgress) {
+                        const QString displayName = m_grpcTestServerCurrentDisplayName.isEmpty()
+                            ? QStringLiteral("候选启动项")
+                            : m_grpcTestServerCurrentDisplayName;
+                        const QString errorDetail = m_grpcTestServerProcess
+                            ? m_grpcTestServerProcess->errorString()
+                            : QStringLiteral("未知错误");
+                        const QString reason = QString("%1: %2").arg(displayName, errorDetail);
+                        m_grpcTestServerStartErrors << reason;
+                        logGrpcInteraction(
+                            "test-server",
+                            QString("启动失败（error=%1）：%2")
+                                .arg(static_cast<int>(error))
+                                .arg(reason));
+                        m_grpcTestServerCurrentDisplayName.clear();
+                        tryStartNextGrpcTestServerCandidate();
+                        return;
+                    }
+
+                    if (m_grpcTestServerStopRequested) {
+                        logGrpcInteraction(
+                            "test-server",
+                            QString("停止流程中收到进程错误，error=%1, detail=%2")
+                                .arg(static_cast<int>(error))
+                                .arg(m_grpcTestServerProcess ? m_grpcTestServerProcess->errorString() : QStringLiteral("未知错误")));
+                        return;
+                    }
+
+                    setGrpcTestServiceStatus("启动失败", "red");
+                    logGrpcInteraction(
+                        "test-server",
+                        QString("测试服务启动/运行错误，error=%1, detail=%2")
+                            .arg(static_cast<int>(error))
+                            .arg(m_grpcTestServerProcess ? m_grpcTestServerProcess->errorString() : QStringLiteral("未知错误")));
                     updateGrpcTestUiState();
                 });
 
@@ -990,6 +1067,55 @@ void MainWindow::logGrpcInteraction(const QString& category, const QString& deta
     qInfo().noquote() << QString("[gRPC][%1] %2").arg(category, detail);
 }
 
+void MainWindow::setGrpcLabelState(GrpcLabelState& target, const QString& text, GrpcLabelTone tone)
+{
+    target.text = text;
+    target.tone = tone;
+}
+
+QString MainWindow::grpcLabelToneColor(GrpcLabelTone tone) const
+{
+    switch (tone) {
+    case GrpcLabelTone::Warning:
+        return QStringLiteral("#c08000");
+    case GrpcLabelTone::Success:
+        return QStringLiteral("green");
+    case GrpcLabelTone::Error:
+        return QStringLiteral("red");
+    case GrpcLabelTone::Neutral:
+    default:
+        return QStringLiteral("gray");
+    }
+}
+
+void MainWindow::applyGrpcLabelState(QLabel* label, const GrpcLabelState& state) const
+{
+    if (!label) {
+        return;
+    }
+
+    label->setText(state.text);
+    label->setStyleSheet(QString("color: %1;").arg(grpcLabelToneColor(state.tone)));
+}
+
+void MainWindow::applyGrpcSelfTestLabelStates()
+{
+    applyGrpcLabelState(m_grpcSelfTestStatusLabel, m_grpcSelfTestOverallState);
+    applyGrpcLabelState(m_grpcSelfTestTxStatusLabel, m_grpcSelfTestTxState);
+    applyGrpcLabelState(m_grpcSelfTestRxStatusLabel, m_grpcSelfTestRxState);
+    applyGrpcLabelState(m_grpcModeSwitchStatusLabel, m_grpcModeSwitchState);
+    applyGrpcLabelState(m_grpcPeriodicDataStatusLabel, m_grpcPeriodicDataState);
+}
+
+void MainWindow::resetGrpcSelfTestLabelStates()
+{
+    setGrpcLabelState(m_grpcSelfTestOverallState, QStringLiteral("未执行"), GrpcLabelTone::Neutral);
+    setGrpcLabelState(m_grpcSelfTestTxState, QStringLiteral("发送(Ping): 待验证"), GrpcLabelTone::Neutral);
+    setGrpcLabelState(m_grpcSelfTestRxState, QStringLiteral("接收(流数据): 待验证"), GrpcLabelTone::Neutral);
+    setGrpcLabelState(m_grpcModeSwitchState, QStringLiteral("待验证"), GrpcLabelTone::Neutral);
+    setGrpcLabelState(m_grpcPeriodicDataState, QStringLiteral("待验证"), GrpcLabelTone::Neutral);
+}
+
 void MainWindow::updateGrpcTestUiState()
 {
     const bool isGrpcBackend = (m_backendTypeCombo &&
@@ -1010,31 +1136,23 @@ void MainWindow::updateGrpcTestUiState()
 
     if (!m_grpcSelfTestPending) {
         if (!isGrpcBackend) {
-            m_grpcSelfTestStatusLabel->setText("仅 gRPC 后端可用");
-            m_grpcSelfTestStatusLabel->setStyleSheet("color: gray;");
-            m_grpcModeSwitchStatusLabel->setText("仅 gRPC 后端可用");
-            m_grpcModeSwitchStatusLabel->setStyleSheet("color: gray;");
-            m_grpcPeriodicDataStatusLabel->setText("仅 gRPC 后端可用");
-            m_grpcPeriodicDataStatusLabel->setStyleSheet("color: gray;");
+            setGrpcLabelState(m_grpcSelfTestOverallState, QStringLiteral("仅 gRPC 后端可用"), GrpcLabelTone::Neutral);
+            setGrpcLabelState(m_grpcModeSwitchState, QStringLiteral("仅 gRPC 后端可用"), GrpcLabelTone::Neutral);
+            setGrpcLabelState(m_grpcPeriodicDataState, QStringLiteral("仅 gRPC 后端可用"), GrpcLabelTone::Neutral);
         } else if (!isGrpcRealMode) {
-            m_grpcSelfTestStatusLabel->setText("Mock 模式不验证真实链路");
-            m_grpcSelfTestStatusLabel->setStyleSheet("color: gray;");
-            m_grpcModeSwitchStatusLabel->setText("Mock 模式不验证切换");
-            m_grpcModeSwitchStatusLabel->setStyleSheet("color: gray;");
-            m_grpcPeriodicDataStatusLabel->setText("Mock 模式不验证周期");
-            m_grpcPeriodicDataStatusLabel->setStyleSheet("color: gray;");
+            setGrpcLabelState(m_grpcSelfTestOverallState, QStringLiteral("Mock 模式不验证真实链路"), GrpcLabelTone::Neutral);
+            setGrpcLabelState(m_grpcModeSwitchState, QStringLiteral("Mock 模式不验证切换"), GrpcLabelTone::Neutral);
+            setGrpcLabelState(m_grpcPeriodicDataState, QStringLiteral("Mock 模式不验证周期"), GrpcLabelTone::Neutral);
         } else if (!m_isConnected) {
-            m_grpcSelfTestStatusLabel->setText("等待连接");
-            m_grpcSelfTestStatusLabel->setStyleSheet("color: gray;");
-            m_grpcModeSwitchStatusLabel->setText("等待连接");
-            m_grpcModeSwitchStatusLabel->setStyleSheet("color: gray;");
-            m_grpcPeriodicDataStatusLabel->setText("等待周期数据");
-            m_grpcPeriodicDataStatusLabel->setStyleSheet("color: gray;");
+            setGrpcLabelState(m_grpcSelfTestOverallState, QStringLiteral("等待连接"), GrpcLabelTone::Neutral);
+            setGrpcLabelState(m_grpcModeSwitchState, QStringLiteral("等待连接"), GrpcLabelTone::Neutral);
+            setGrpcLabelState(m_grpcPeriodicDataState, QStringLiteral("等待周期数据"), GrpcLabelTone::Neutral);
         } else if (m_grpcPeriodicPacketCount <= 0) {
-            m_grpcPeriodicDataStatusLabel->setText("等待周期数据");
-            m_grpcPeriodicDataStatusLabel->setStyleSheet("color: #c08000;");
+            setGrpcLabelState(m_grpcPeriodicDataState, QStringLiteral("等待周期数据"), GrpcLabelTone::Warning);
         }
     }
+
+    applyGrpcSelfTestLabelStates();
 }
 
 void MainWindow::startGrpcSelfTest(bool autoTriggered)
@@ -1080,24 +1198,23 @@ void MainWindow::startGrpcSelfTest(bool autoTriggered)
     }
     m_grpcSelfTestPendingAcks << "ping" << "mode";
 
-    m_grpcSelfTestTxStatusLabel->setText("发送(Ping): 验证中...");
-    m_grpcSelfTestRxStatusLabel->setText("接收(流数据): 验证中...");
-    m_grpcModeSwitchStatusLabel->setText(QString("切换(%1): 验证中...").arg(m_grpcSelfTestTargetMode));
-    m_grpcPeriodicDataStatusLabel->setText("周期数据: 验证中...");
-    m_grpcSelfTestTxStatusLabel->setStyleSheet("color: #c08000;");
-    m_grpcSelfTestRxStatusLabel->setStyleSheet("color: #c08000;");
-    m_grpcModeSwitchStatusLabel->setStyleSheet("color: #c08000;");
-    m_grpcPeriodicDataStatusLabel->setStyleSheet("color: #c08000;");
-    m_grpcSelfTestStatusLabel->setText(autoTriggered ? "自动自检中..." : "手动自检中...");
-    m_grpcSelfTestStatusLabel->setStyleSheet("color: #c08000;");
+    setGrpcLabelState(m_grpcSelfTestTxState, QStringLiteral("发送(Ping): 验证中..."), GrpcLabelTone::Warning);
+    setGrpcLabelState(m_grpcSelfTestRxState, QStringLiteral("接收(流数据): 验证中..."), GrpcLabelTone::Warning);
+    setGrpcLabelState(
+        m_grpcModeSwitchState,
+        QString("切换(%1): 验证中...").arg(m_grpcSelfTestTargetMode),
+        GrpcLabelTone::Warning);
+    setGrpcLabelState(m_grpcPeriodicDataState, QStringLiteral("周期数据: 验证中..."), GrpcLabelTone::Warning);
+    setGrpcLabelState(
+        m_grpcSelfTestOverallState,
+        autoTriggered ? QStringLiteral("自动自检中...") : QStringLiteral("手动自检中..."),
+        GrpcLabelTone::Warning);
 
     const qint64 nowMs = QDateTime::currentMSecsSinceEpoch();
     if (nowMs - m_lastGrpcStreamTimestampMs <= 2000) {
         m_grpcSelfTestStreamReceived = true;
-        m_grpcSelfTestRxStatusLabel->setText("接收(流数据): 已收到");
-        m_grpcSelfTestRxStatusLabel->setStyleSheet("color: green;");
-        m_grpcPeriodicDataStatusLabel->setText("周期数据: 已收到最近周期包");
-        m_grpcPeriodicDataStatusLabel->setStyleSheet("color: green;");
+        setGrpcLabelState(m_grpcSelfTestRxState, QStringLiteral("接收(流数据): 已收到"), GrpcLabelTone::Success);
+        setGrpcLabelState(m_grpcPeriodicDataState, QStringLiteral("周期数据: 已收到最近周期包"), GrpcLabelTone::Success);
     }
 
     logGrpcInteraction(
@@ -1123,8 +1240,7 @@ void MainWindow::handleGrpcBackendPacket(const QJsonObject& packet)
         const QString mode = packet.value("mode").toString();
 
         m_lastGrpcStreamTimestampMs = localTs;
-        m_grpcSelfTestRxStatusLabel->setText("接收(流数据): 已收到");
-        m_grpcSelfTestRxStatusLabel->setStyleSheet("color: green;");
+        setGrpcLabelState(m_grpcSelfTestRxState, QStringLiteral("接收(流数据): 已收到"), GrpcLabelTone::Success);
 
         ++m_grpcPeriodicPacketCount;
         if (payloadTimestamp > 0) {
@@ -1137,14 +1253,14 @@ void MainWindow::handleGrpcBackendPacket(const QJsonObject& packet)
         if (m_grpcPeriodicPacketCount > 1) {
             const double avgInterval = static_cast<double>(m_grpcPeriodicIntervalSumMs)
                 / static_cast<double>(m_grpcPeriodicPacketCount - 1);
-            m_grpcPeriodicDataStatusLabel->setText(
+            setGrpcLabelState(
+                m_grpcPeriodicDataState,
                 QString("已接收%1条, 平均%2ms")
                     .arg(m_grpcPeriodicPacketCount)
-                    .arg(avgInterval, 0, 'f', 1));
-            m_grpcPeriodicDataStatusLabel->setStyleSheet("color: green;");
+                    .arg(avgInterval, 0, 'f', 1),
+                GrpcLabelTone::Success);
         } else {
-            m_grpcPeriodicDataStatusLabel->setText("已接收首条周期数据");
-            m_grpcPeriodicDataStatusLabel->setStyleSheet("color: #c08000;");
+            setGrpcLabelState(m_grpcPeriodicDataState, QStringLiteral("已接收首条周期数据"), GrpcLabelTone::Warning);
         }
 
         logGrpcInteraction(
@@ -1159,6 +1275,7 @@ void MainWindow::handleGrpcBackendPacket(const QJsonObject& packet)
             m_grpcSelfTestStreamReceived = true;
             finalizeGrpcSelfTest();
         }
+        updateGrpcTestUiState();
         return;
     }
 
@@ -1195,24 +1312,31 @@ void MainWindow::handleGrpcBackendPacket(const QJsonObject& packet)
 
         if (isSuccess) {
             if (ackStage == "ping") {
-                m_grpcSelfTestTxStatusLabel->setText(message.isEmpty() ? "发送(Ping): 命令回包成功"
-                                                                        : QString("发送(Ping): %1").arg(message));
-                m_grpcSelfTestTxStatusLabel->setStyleSheet("color: green;");
+                setGrpcLabelState(
+                    m_grpcSelfTestTxState,
+                    message.isEmpty() ? QStringLiteral("发送(Ping): 命令回包成功")
+                                      : QString("发送(Ping): %1").arg(message),
+                    GrpcLabelTone::Success);
                 m_grpcSelfTestCommandAcked = true;
             } else if (ackStage == "mode") {
-                m_grpcModeSwitchStatusLabel->setText(message.isEmpty()
-                    ? QString("切换(%1): 回包成功").arg(m_grpcSelfTestTargetMode)
-                    : QString("切换(%1): %2").arg(m_grpcSelfTestTargetMode, message));
-                m_grpcModeSwitchStatusLabel->setStyleSheet("color: green;");
+                setGrpcLabelState(
+                    m_grpcModeSwitchState,
+                    message.isEmpty() ? QString("切换(%1): 回包成功").arg(m_grpcSelfTestTargetMode)
+                                      : QString("切换(%1): %2").arg(m_grpcSelfTestTargetMode, message),
+                    GrpcLabelTone::Success);
                 m_grpcSelfTestModeSwitchAcked = true;
             } else {
-                m_grpcSelfTestTxStatusLabel->setText(message.isEmpty() ? "发送: 命令回包成功"
-                                                                        : QString("发送: %1").arg(message));
-                m_grpcSelfTestTxStatusLabel->setStyleSheet("color: green;");
+                setGrpcLabelState(
+                    m_grpcSelfTestTxState,
+                    message.isEmpty() ? QStringLiteral("发送: 命令回包成功")
+                                      : QString("发送: %1").arg(message),
+                    GrpcLabelTone::Success);
 
                 if (message.contains("模式已切换", Qt::CaseInsensitive)) {
-                    m_grpcModeSwitchStatusLabel->setText(QString("切换: %1").arg(message));
-                    m_grpcModeSwitchStatusLabel->setStyleSheet("color: green;");
+                    setGrpcLabelState(
+                        m_grpcModeSwitchState,
+                        QString("切换: %1").arg(message),
+                        GrpcLabelTone::Success);
                 }
             }
 
@@ -1221,21 +1345,21 @@ void MainWindow::handleGrpcBackendPacket(const QJsonObject& packet)
             }
         } else {
             if (ackStage == "mode") {
-                m_grpcModeSwitchStatusLabel->setText(QString("切换(%1): 回包失败").arg(m_grpcSelfTestTargetMode));
-                m_grpcModeSwitchStatusLabel->setStyleSheet("color: red;");
+                setGrpcLabelState(
+                    m_grpcModeSwitchState,
+                    QString("切换(%1): 回包失败").arg(m_grpcSelfTestTargetMode),
+                    GrpcLabelTone::Error);
             } else {
-                m_grpcSelfTestTxStatusLabel->setText("发送(Ping): 回包失败");
-                m_grpcSelfTestTxStatusLabel->setStyleSheet("color: red;");
+                setGrpcLabelState(m_grpcSelfTestTxState, QStringLiteral("发送(Ping): 回包失败"), GrpcLabelTone::Error);
             }
 
             if (m_grpcSelfTestPending) {
                 m_grpcSelfTestPending = false;
                 m_grpcSelfTestTimeoutTimer->stop();
-                m_grpcSelfTestStatusLabel->setText("收发验证失败");
-                m_grpcSelfTestStatusLabel->setStyleSheet("color: red;");
+                setGrpcLabelState(m_grpcSelfTestOverallState, QStringLiteral("收发验证失败"), GrpcLabelTone::Error);
             }
-            updateGrpcTestUiState();
         }
+        updateGrpcTestUiState();
         return;
     }
 
@@ -1251,19 +1375,16 @@ void MainWindow::handleGrpcBackendPacket(const QJsonObject& packet)
                 .arg(status, mode, endpoint, detail));
 
         if (status == "connected" && mode == "real" && !m_grpcSelfTestPending) {
-            m_grpcSelfTestStatusLabel->setText("已连接，等待收发验证");
-            m_grpcSelfTestStatusLabel->setStyleSheet("color: #c08000;");
-            m_grpcModeSwitchStatusLabel->setText("等待模式切换验证");
-            m_grpcModeSwitchStatusLabel->setStyleSheet("color: #c08000;");
+            setGrpcLabelState(m_grpcSelfTestOverallState, QStringLiteral("已连接，等待收发验证"), GrpcLabelTone::Warning);
+            setGrpcLabelState(m_grpcModeSwitchState, QStringLiteral("等待模式切换验证"), GrpcLabelTone::Warning);
         }
 
         if (status == "disconnected" && m_grpcSelfTestPending) {
             m_grpcSelfTestPending = false;
             m_grpcSelfTestTimeoutTimer->stop();
-            m_grpcSelfTestStatusLabel->setText("收发验证失败（连接中断）");
-            m_grpcSelfTestStatusLabel->setStyleSheet("color: red;");
-            updateGrpcTestUiState();
+            setGrpcLabelState(m_grpcSelfTestOverallState, QStringLiteral("收发验证失败（连接中断）"), GrpcLabelTone::Error);
         }
+        updateGrpcTestUiState();
     }
 }
 
@@ -1280,8 +1401,7 @@ void MainWindow::finalizeGrpcSelfTest()
     m_grpcSelfTestPending = false;
     m_grpcSelfTestTimeoutTimer->stop();
     m_grpcSelfTestPendingAcks.clear();
-    m_grpcSelfTestStatusLabel->setText("收发验证通过");
-    m_grpcSelfTestStatusLabel->setStyleSheet("color: green;");
+    setGrpcLabelState(m_grpcSelfTestOverallState, QStringLiteral("收发验证通过"), GrpcLabelTone::Success);
     logGrpcInteraction("self-test", "自检通过：ping/pong、模式切换、周期数据验证全部成功");
     updateGrpcTestUiState();
 }
@@ -1383,6 +1503,113 @@ QString MainWindow::resolveGrpcTestServerPythonExecutablePath(const QString& scr
 
     return QString();
 }
+
+void MainWindow::setGrpcTestServiceStatus(const QString& text, const QString& color)
+{
+    if (!m_grpcTestServiceStatusLabel) {
+        return;
+    }
+
+    m_grpcTestServiceStatusLabel->setText(text);
+    m_grpcTestServiceStatusLabel->setStyleSheet(QString("color: %1;").arg(color));
+}
+
+#ifndef QT_COMPILE_FOR_WASM
+QList<MainWindow::GrpcTestServerLaunchCandidate>
+MainWindow::buildGrpcTestServerLaunchCandidates(const QString& port) const
+{
+    QList<GrpcTestServerLaunchCandidate> candidates;
+
+    const QString executablePath = resolveGrpcTestServerExecutablePath();
+    if (!executablePath.isEmpty()) {
+        candidates.append({
+            executablePath,
+            QStringList() << "--port" << port,
+            QStringLiteral("grpc_test_server.exe"),
+            QFileInfo(executablePath).absolutePath()
+        });
+    }
+
+    const QString scriptPath = resolveGrpcTestServerScriptPath();
+    if (!scriptPath.isEmpty()) {
+        const QString scriptWorkingDir = QFileInfo(scriptPath).absolutePath();
+        const QStringList scriptArgs = QStringList() << scriptPath << "--port" << port;
+
+        const QString preferredPythonPath = resolveGrpcTestServerPythonExecutablePath(scriptPath);
+        if (!preferredPythonPath.isEmpty()) {
+            candidates.append({
+                preferredPythonPath,
+                scriptArgs,
+                QStringLiteral("项目虚拟环境 Python"),
+                scriptWorkingDir
+            });
+        }
+
+        candidates.append({
+            QStringLiteral("python"),
+            scriptArgs,
+            QStringLiteral("系统 Python"),
+            scriptWorkingDir
+        });
+
+        candidates.append({
+            QStringLiteral("py"),
+            QStringList() << "-3" << scriptPath << "--port" << port,
+            QStringLiteral("py -3"),
+            scriptWorkingDir
+        });
+    }
+
+    return candidates;
+}
+
+void MainWindow::tryStartNextGrpcTestServerCandidate()
+{
+    if (!m_grpcTestServerProcess) {
+        return;
+    }
+
+    if (m_grpcTestServerLaunchQueue.isEmpty()) {
+        m_grpcTestServerLaunchInProgress = false;
+        m_grpcTestServerCurrentDisplayName.clear();
+
+        setGrpcTestServiceStatus("启动失败", "red");
+
+        const QString details = m_grpcTestServerStartErrors.isEmpty()
+            ? QStringLiteral("未找到可用的启动候选项")
+            : m_grpcTestServerStartErrors.join("\n");
+
+        QMessageBox::warning(this,
+                             "启动失败",
+                             QString("无法启动本地 gRPC 测试服务。\n"
+                                     "生产环境请优先提供 grpc_test_server.exe。\n\n"
+                                     "启动详情:\n%1")
+                                 .arg(details));
+        QString detailForLog = details;
+        detailForLog.replace("\n", " | ");
+        logGrpcInteraction("test-server", QString("启动失败详情：%1").arg(detailForLog));
+
+        updateGrpcTestUiState();
+        return;
+    }
+
+    const GrpcTestServerLaunchCandidate candidate = m_grpcTestServerLaunchQueue.takeFirst();
+    m_grpcTestServerCurrentDisplayName = candidate.displayName;
+    m_grpcTestServerProcess->setWorkingDirectory(candidate.workingDirectory);
+    m_grpcTestServerProcess->start(candidate.program, candidate.arguments);
+
+    if (m_grpcTestServerStartTimeoutTimer) {
+        m_grpcTestServerStartTimeoutTimer->start();
+    }
+
+    logGrpcInteraction(
+        "test-server",
+        QString("尝试启动：%1, program=%2, args=%3")
+            .arg(candidate.displayName, candidate.program, candidate.arguments.join(' ')));
+
+    updateGrpcTestUiState();
+}
+#endif
 
 int MainWindow::grpcEndpointPort() const
 {
@@ -1640,14 +1867,10 @@ void MainWindow::onBackendTypeChanged(int index)
     m_grpcPeriodicIntervalSumMs = 0;
     m_lastGrpcStreamPayloadTimestampMs = 0;
     m_lastGrpcStreamTimestampMs = 0;
-    m_grpcSelfTestTxStatusLabel->setText("发送(Ping): 待验证");
-    m_grpcSelfTestRxStatusLabel->setText("接收(流数据): 待验证");
-    m_grpcModeSwitchStatusLabel->setText("待验证");
-    m_grpcPeriodicDataStatusLabel->setText("待验证");
-    m_grpcSelfTestTxStatusLabel->setStyleSheet("color: gray;");
-    m_grpcSelfTestRxStatusLabel->setStyleSheet("color: gray;");
-    m_grpcModeSwitchStatusLabel->setStyleSheet("color: gray;");
-    m_grpcPeriodicDataStatusLabel->setStyleSheet("color: gray;");
+    setGrpcLabelState(m_grpcSelfTestTxState, QStringLiteral("发送(Ping): 待验证"), GrpcLabelTone::Neutral);
+    setGrpcLabelState(m_grpcSelfTestRxState, QStringLiteral("接收(流数据): 待验证"), GrpcLabelTone::Neutral);
+    setGrpcLabelState(m_grpcModeSwitchState, QStringLiteral("待验证"), GrpcLabelTone::Neutral);
+    setGrpcLabelState(m_grpcPeriodicDataState, QStringLiteral("待验证"), GrpcLabelTone::Neutral);
 
     updateGrpcTestUiState();
 }
@@ -1659,102 +1882,40 @@ void MainWindow::onStartGrpcTestServerClicked()
     return;
 #else
     if (!m_grpcTestServerProcess ||
-        m_grpcTestServerProcess->state() != QProcess::NotRunning) {
+        m_grpcTestServerProcess->state() != QProcess::NotRunning ||
+        m_grpcTestServerLaunchInProgress) {
         return;
     }
 
     logGrpcInteraction("test-server", "请求启动本地 gRPC 测试服务");
 
     const QString port = QString::number(grpcEndpointPort());
+    m_grpcTestServerLaunchQueue = buildGrpcTestServerLaunchCandidates(port);
+    m_grpcTestServerStartErrors.clear();
+    m_grpcTestServerCurrentDisplayName.clear();
+    m_grpcTestServerStopRequested = false;
+    m_grpcTestServerLaunchInProgress = true;
 
-    m_grpcTestServiceStatusLabel->setText("启动中...");
-    m_grpcTestServiceStatusLabel->setStyleSheet("color: #c08000;");
-
-    QStringList startErrors;
-    auto tryStartServer = [this, &startErrors](const QString& program,
-                                                const QStringList& args,
-                                                const QString& displayName,
-                                                const QString& workingDir) {
-        m_grpcTestServerProcess->setWorkingDirectory(workingDir);
-        m_grpcTestServerProcess->start(program, args);
-        if (m_grpcTestServerProcess->waitForStarted(1500)) {
-            logGrpcInteraction("test-server", QString("启动成功：%1").arg(displayName));
-            return true;
+    bool hasExecutableCandidate = false;
+    bool hasPythonFallbackCandidate = false;
+    for (const GrpcTestServerLaunchCandidate& candidate : m_grpcTestServerLaunchQueue) {
+        if (candidate.displayName == "grpc_test_server.exe") {
+            hasExecutableCandidate = true;
+        } else {
+            hasPythonFallbackCandidate = true;
         }
-
-        const QString error = m_grpcTestServerProcess->errorString();
-        startErrors << QString("%1: %2").arg(displayName, error);
-        logGrpcInteraction("test-server", QString("启动失败（%1）：%2").arg(displayName, error));
-        return false;
-    };
-
-    const QString executablePath = resolveGrpcTestServerExecutablePath();
-    if (!executablePath.isEmpty()) {
-        const QString executableWorkingDir = QFileInfo(executablePath).absolutePath();
-        logGrpcInteraction("test-server", QString("优先使用打包服务: %1").arg(executablePath));
-        if (tryStartServer(executablePath,
-                           QStringList() << "--port" << port,
-                           "grpc_test_server.exe",
-                           executableWorkingDir)) {
-            updateGrpcTestUiState();
-            return;
-        }
-    } else {
-        logGrpcInteraction("test-server", "未找到 grpc_test_server.exe，回退到 Python 脚本模式");
     }
 
-    const QString scriptPath = resolveGrpcTestServerScriptPath();
-    if (!scriptPath.isEmpty()) {
-        const QString scriptWorkingDir = QFileInfo(scriptPath).absolutePath();
-        const QStringList scriptArgs = QStringList() << scriptPath << "--port" << port;
-
-        const QString preferredPythonPath = resolveGrpcTestServerPythonExecutablePath(scriptPath);
-        if (!preferredPythonPath.isEmpty()) {
-            logGrpcInteraction("test-server", QString("回退到项目虚拟环境解释器: %1").arg(preferredPythonPath));
-            if (tryStartServer(preferredPythonPath,
-                               scriptArgs,
-                               "项目虚拟环境 Python",
-                               scriptWorkingDir)) {
-                updateGrpcTestUiState();
-                return;
-            }
-        }
-
-        if (tryStartServer("python",
-                           scriptArgs,
-                           "系统 Python",
-                           scriptWorkingDir)) {
-            updateGrpcTestUiState();
-            return;
-        }
-
-        if (tryStartServer("py",
-                           QStringList() << "-3" << scriptPath << "--port" << port,
-                           "py -3",
-                           scriptWorkingDir)) {
-            updateGrpcTestUiState();
-            return;
-        }
-    } else {
-        startErrors << "未找到 grpc_test_server.py（开发回退脚本）";
+    if (!hasExecutableCandidate) {
+        logGrpcInteraction("test-server", "未找到 grpc_test_server.exe，回退到 Python 脚本模式");
+    }
+    if (!hasPythonFallbackCandidate) {
         logGrpcInteraction("test-server", "未找到 grpc_test_server.py，无法执行 Python 回退启动");
     }
 
-    if (m_grpcTestServerProcess->state() == QProcess::NotRunning) {
-        m_grpcTestServiceStatusLabel->setText("启动失败");
-        m_grpcTestServiceStatusLabel->setStyleSheet("color: red;");
-        QMessageBox::warning(this,
-                             "启动失败",
-                             QString("无法启动本地 gRPC 测试服务。\n"
-                                     "生产环境请优先提供 grpc_test_server.exe。\n\n"
-                                     "启动详情:\n%1")
-                                 .arg(startErrors.join("\n")));
-        logGrpcInteraction("test-server", QString("启动失败详情：%1").arg(startErrors.join(" | ")));
-        updateGrpcTestUiState();
-        return;
-    }
+    setGrpcTestServiceStatus("启动中...", "#c08000");
 
-    updateGrpcTestUiState();
+    tryStartNextGrpcTestServerCandidate();
 #endif
 }
 
@@ -1762,19 +1923,60 @@ void MainWindow::onStopGrpcTestServerClicked()
 {
 #ifndef QT_COMPILE_FOR_WASM
     if (!m_grpcTestServerProcess ||
-        m_grpcTestServerProcess->state() == QProcess::NotRunning) {
+        (m_grpcTestServerProcess->state() == QProcess::NotRunning && !m_grpcTestServerLaunchInProgress)) {
         return;
     }
 
     logGrpcInteraction("test-server", "请求停止本地 gRPC 测试服务");
 
-    m_grpcTestServerProcess->terminate();
-    if (!m_grpcTestServerProcess->waitForFinished(2000)) {
-        m_grpcTestServerProcess->kill();
-        m_grpcTestServerProcess->waitForFinished(1000);
+    m_grpcTestServerStopRequested = true;
+    m_grpcTestServerLaunchInProgress = false;
+    m_grpcTestServerLaunchQueue.clear();
+    m_grpcTestServerCurrentDisplayName.clear();
+    if (m_grpcTestServerStartTimeoutTimer) {
+        m_grpcTestServerStartTimeoutTimer->stop();
     }
 
+    setGrpcTestServiceStatus("停止中...", "#c08000");
+
+    m_grpcTestServerProcess->terminate();
+    QTimer::singleShot(2000, this, [this]() {
+        if (!m_grpcTestServerProcess) {
+            return;
+        }
+        if (m_grpcTestServerProcess->state() != QProcess::NotRunning) {
+            logGrpcInteraction("test-server", "停止超时，执行强制结束");
+            m_grpcTestServerProcess->kill();
+        }
+    });
+
     updateGrpcTestUiState();
+#endif
+}
+
+void MainWindow::onGrpcTestServerStartTimeout()
+{
+#ifndef QT_COMPILE_FOR_WASM
+    if (!m_grpcTestServerProcess || !m_grpcTestServerLaunchInProgress) {
+        return;
+    }
+
+    if (m_grpcTestServerProcess->state() != QProcess::NotRunning) {
+        if (m_grpcTestServerStartTimeoutTimer) {
+            m_grpcTestServerStartTimeoutTimer->start();
+        }
+        return;
+    }
+
+    const QString displayName = m_grpcTestServerCurrentDisplayName.isEmpty()
+        ? QStringLiteral("候选启动项")
+        : m_grpcTestServerCurrentDisplayName;
+    const QString reason = QString("%1: 启动超时").arg(displayName);
+    m_grpcTestServerStartErrors << reason;
+    logGrpcInteraction("test-server", reason);
+    m_grpcTestServerCurrentDisplayName.clear();
+
+    tryStartNextGrpcTestServerCandidate();
 #endif
 }
 
@@ -1793,22 +1995,21 @@ void MainWindow::onGrpcSelfTestTimeout()
     m_grpcSelfTestPendingAcks.clear();
 
     if (!m_grpcSelfTestCommandAcked) {
-        m_grpcSelfTestTxStatusLabel->setText("发送(Ping): 超时未回包");
-        m_grpcSelfTestTxStatusLabel->setStyleSheet("color: red;");
+        setGrpcLabelState(m_grpcSelfTestTxState, QStringLiteral("发送(Ping): 超时未回包"), GrpcLabelTone::Error);
     }
 
     if (!m_grpcSelfTestModeSwitchAcked) {
-        m_grpcModeSwitchStatusLabel->setText(QString("切换(%1): 超时未回包")
-                                             .arg(m_grpcSelfTestTargetMode.isEmpty() ? QStringLiteral("-")
-                                                                                    : m_grpcSelfTestTargetMode));
-        m_grpcModeSwitchStatusLabel->setStyleSheet("color: red;");
+        setGrpcLabelState(
+            m_grpcModeSwitchState,
+            QString("切换(%1): 超时未回包")
+                .arg(m_grpcSelfTestTargetMode.isEmpty() ? QStringLiteral("-")
+                                                        : m_grpcSelfTestTargetMode),
+            GrpcLabelTone::Error);
     }
 
     if (!m_grpcSelfTestStreamReceived) {
-        m_grpcSelfTestRxStatusLabel->setText("接收(流数据): 未收到");
-        m_grpcSelfTestRxStatusLabel->setStyleSheet("color: red;");
-        m_grpcPeriodicDataStatusLabel->setText("周期数据: 未收到");
-        m_grpcPeriodicDataStatusLabel->setStyleSheet("color: red;");
+        setGrpcLabelState(m_grpcSelfTestRxState, QStringLiteral("接收(流数据): 未收到"), GrpcLabelTone::Error);
+        setGrpcLabelState(m_grpcPeriodicDataState, QStringLiteral("周期数据: 未收到"), GrpcLabelTone::Error);
     }
 
     QStringList missingItems;
@@ -1822,9 +2023,10 @@ void MainWindow::onGrpcSelfTestTimeout()
         missingItems << "流数据";
     }
 
-    m_grpcSelfTestStatusLabel->setText(
-        QString("收发验证失败（缺少%1）").arg(missingItems.join("、")));
-    m_grpcSelfTestStatusLabel->setStyleSheet("color: red;");
+    setGrpcLabelState(
+        m_grpcSelfTestOverallState,
+        QString("收发验证失败（缺少%1）").arg(missingItems.join("、")),
+        GrpcLabelTone::Error);
     logGrpcInteraction("self-test", QString("自检超时失败，缺少: %1").arg(missingItems.join("、")));
     updateGrpcTestUiState();
 }
@@ -2057,18 +2259,18 @@ void MainWindow::onCommandError(const QString& error)
         m_grpcSelfTestPending = false;
         m_grpcSelfTestTimeoutTimer->stop();
         m_grpcSelfTestPendingAcks.clear();
-        m_grpcSelfTestStatusLabel->setText("收发验证失败（命令错误）");
-        m_grpcSelfTestStatusLabel->setStyleSheet("color: red;");
+        setGrpcLabelState(m_grpcSelfTestOverallState, QStringLiteral("收发验证失败（命令错误）"), GrpcLabelTone::Error);
 
         if (!m_grpcSelfTestCommandAcked) {
-            m_grpcSelfTestTxStatusLabel->setText("发送(Ping): 命令失败");
-            m_grpcSelfTestTxStatusLabel->setStyleSheet("color: red;");
+            setGrpcLabelState(m_grpcSelfTestTxState, QStringLiteral("发送(Ping): 命令失败"), GrpcLabelTone::Error);
         }
         if (!m_grpcSelfTestModeSwitchAcked) {
-            m_grpcModeSwitchStatusLabel->setText(QString("切换(%1): 命令失败")
-                                                 .arg(m_grpcSelfTestTargetMode.isEmpty() ? QStringLiteral("-")
-                                                                                        : m_grpcSelfTestTargetMode));
-            m_grpcModeSwitchStatusLabel->setStyleSheet("color: red;");
+            setGrpcLabelState(
+                m_grpcModeSwitchState,
+                QString("切换(%1): 命令失败")
+                    .arg(m_grpcSelfTestTargetMode.isEmpty() ? QStringLiteral("-")
+                                                            : m_grpcSelfTestTargetMode),
+                GrpcLabelTone::Error);
         }
 
         logGrpcInteraction("self-test", QString("自检失败（命令错误）: %1").arg(error));
