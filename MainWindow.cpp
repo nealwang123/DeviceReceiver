@@ -9,8 +9,10 @@
 #include <QCloseEvent>
 #include <QCoreApplication>
 #include <QDateTime>
+#include <QGuiApplication>
 #include <QMessageBox>
 #include <QMenuBar>
+#include <QScreen>
 #include <QStatusBar>
 #include <QAction>
 #include <QToolBar>
@@ -39,6 +41,7 @@
 #include <QDateTimeEdit>
 #include <QDir>
 #include <QRegularExpression>
+#include <QWindow>
 #include <cmath>
 
 #ifndef QT_COMPILE_FOR_WASM
@@ -263,11 +266,11 @@ void MainWindow::closeEvent(QCloseEvent* event)
     }
 #endif
 
-    // 保存窗口状态和几何信息
+    // 保存界面配置、面板可见性和窗口状态
+    saveConfigFromUI();
+
     AppConfig* config = AppConfig::instance();
     if (config) {
-        config->setMainWindowState(saveState());
-        config->setMainWindowGeometry(saveGeometry());
         config->saveToFile("config.ini");
     }
     
@@ -418,7 +421,10 @@ void MainWindow::initUI()
         
         // 控制按钮组
         QGroupBox* controlGroup = new QGroupBox("设备控制");
-        QHBoxLayout* controlLayout = new QHBoxLayout(controlGroup);
+        QVBoxLayout* controlLayout = new QVBoxLayout(controlGroup);
+        QHBoxLayout* controlRow1Layout = new QHBoxLayout();
+        QHBoxLayout* controlRow2Layout = new QHBoxLayout();
+        QHBoxLayout* controlStatusLayout = new QHBoxLayout();
         
         m_connectButton = new QPushButton("连接");
         m_disconnectButton = new QPushButton("断开");
@@ -430,14 +436,26 @@ void MainWindow::initUI()
         m_resumeButton->setEnabled(false);
         m_connectionStatusLabel = new QLabel("未连接");
         m_connectionStatusLabel->setStyleSheet("color: red;");
+
+        for (QPushButton* button : {m_connectButton, m_disconnectButton, m_pauseButton, m_resumeButton, m_exportButton}) {
+            button->setMinimumWidth(0);
+            button->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
+        }
+
+        controlRow1Layout->addWidget(m_connectButton);
+        controlRow1Layout->addWidget(m_disconnectButton);
+        controlRow1Layout->addWidget(m_pauseButton);
+
+        controlRow2Layout->addWidget(m_resumeButton);
+        controlRow2Layout->addWidget(m_exportButton);
+        controlRow2Layout->addStretch();
+
+        controlStatusLayout->addWidget(m_connectionStatusLabel);
+        controlStatusLayout->addStretch();
         
-        controlLayout->addWidget(m_connectButton);
-        controlLayout->addWidget(m_disconnectButton);
-        controlLayout->addWidget(m_pauseButton);
-        controlLayout->addWidget(m_resumeButton);
-        controlLayout->addWidget(m_exportButton);
-        controlLayout->addStretch();
-        controlLayout->addWidget(m_connectionStatusLabel);
+        controlLayout->addLayout(controlRow1Layout);
+        controlLayout->addLayout(controlRow2Layout);
+        controlLayout->addLayout(controlStatusLayout);
 
         QGroupBox* grpcTestGroup = new QGroupBox("gRPC 测试验证");
         QVBoxLayout* grpcTestLayout = new QVBoxLayout(grpcTestGroup);
@@ -614,6 +632,10 @@ void MainWindow::initUI()
         
         m_plotPanel->setWidget(plotWidget);
         addDockWidget(Qt::LeftDockWidgetArea, m_plotPanel);
+
+        // 左侧面板采用标签页管理，避免并排后显示不全
+        tabifyDockWidget(m_devicePanel, m_plotPanel);
+        m_devicePanel->raise();
         
         // 4. 数据监控面板
         m_monitorPanel = new QDockWidget("数据监控", this);
@@ -658,8 +680,16 @@ void MainWindow::initUI()
             if (!config->mainWindowState().isEmpty()) {
                 restoreState(config->mainWindowState());
             }
+
+            bool geometryRestored = false;
             if (!config->mainWindowGeometry().isEmpty()) {
-                restoreGeometry(config->mainWindowGeometry());
+                geometryRestored = restoreGeometry(config->mainWindowGeometry());
+            }
+            if (!geometryRestored) {
+                const QSize fallbackSize = config->windowSize().isValid()
+                    ? config->windowSize()
+                    : QSize(1200, 800);
+                resize(fallbackSize);
             }
             
             // 更新面板显示状态
@@ -672,6 +702,49 @@ void MainWindow::initUI()
             m_commandPanel->setVisible(config->showCommandPanel());
             m_plotPanel->setVisible(config->showPlotPanel());
             m_monitorPanel->setVisible(config->showMonitorPanel());
+
+            if (m_devicePanel->isVisible()) {
+                m_devicePanel->raise();
+            } else if (m_plotPanel->isVisible()) {
+                m_plotPanel->raise();
+            }
+
+            if (!isMaximized() && !isFullScreen()) {
+                QScreen* screen = nullptr;
+                if (windowHandle()) {
+                    screen = windowHandle()->screen();
+                }
+                if (!screen) {
+                    screen = QGuiApplication::primaryScreen();
+                }
+
+                if (screen) {
+                    const QRect available = screen->availableGeometry();
+                    QRect target = geometry();
+                    const QSize minimumHint = minimumSizeHint().expandedTo(minimumSize());
+
+                    const int minWidth = qMin(qMax(320, minimumHint.width()), available.width());
+                    const int minHeight = qMin(qMax(320, minimumHint.height()), available.height());
+
+                    target.setWidth(qMax(minWidth, qMin(target.width(), available.width())));
+                    target.setHeight(qMax(minHeight, qMin(target.height(), available.height())));
+
+                    if (target.left() < available.left()) {
+                        target.moveLeft(available.left());
+                    }
+                    if (target.top() < available.top()) {
+                        target.moveTop(available.top());
+                    }
+                    if (target.right() > available.right()) {
+                        target.moveLeft(available.right() - target.width() + 1);
+                    }
+                    if (target.bottom() > available.bottom()) {
+                        target.moveTop(available.bottom() - target.height() + 1);
+                    }
+
+                    setGeometry(target);
+                }
+            }
         }
         qDebug() << "[MainWindow::initUI] 完成";
     } catch (const std::exception& e) {
@@ -964,6 +1037,10 @@ void MainWindow::saveConfigFromUI()
     config->setShowMonitorPanel(m_monitorPanel->isVisible());
     
     // 保存窗口状态
+    const QSize windowSize = (isMaximized() || isFullScreen()) ? normalGeometry().size() : size();
+    if (windowSize.isValid()) {
+        config->setWindowSize(windowSize);
+    }
     config->setMainWindowState(saveState());
     config->setMainWindowGeometry(saveGeometry());
 }

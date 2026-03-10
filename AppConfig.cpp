@@ -73,6 +73,14 @@ bool AppConfig::loadFromFile(const QString& filename)
     int styleValue = settings.value("Style/CurrentStyle", static_cast<int>(m_currentStyle)).toInt();
     m_currentStyle = (styleValue == 0) ? DarkStyle : LightStyle;
 
+    // 加载UI配置
+    m_showDevicePanel = settings.value("UI/ShowDevicePanel", m_showDevicePanel).toBool();
+    m_showCommandPanel = settings.value("UI/ShowCommandPanel", m_showCommandPanel).toBool();
+    m_showPlotPanel = settings.value("UI/ShowPlotPanel", m_showPlotPanel).toBool();
+    m_showMonitorPanel = settings.value("UI/ShowMonitorPanel", m_showMonitorPanel).toBool();
+    m_mainWindowState = settings.value("UI/MainWindowState", m_mainWindowState).toByteArray();
+    m_mainWindowGeometry = settings.value("UI/MainWindowGeometry", m_mainWindowGeometry).toByteArray();
+
     // 导出配置
     m_defaultExportDirectory = settings.value("Export/Directory", m_defaultExportDirectory).toString();
     m_defaultExportFormat = settings.value("Export/Format", m_defaultExportFormat).toString();
@@ -119,6 +127,14 @@ bool AppConfig::saveToFile(const QString& filename)
     // 保存样式配置
     settings.setValue("Style/CurrentStyle", static_cast<int>(m_currentStyle));
 
+    // 保存UI配置
+    settings.setValue("UI/ShowDevicePanel", m_showDevicePanel);
+    settings.setValue("UI/ShowCommandPanel", m_showCommandPanel);
+    settings.setValue("UI/ShowPlotPanel", m_showPlotPanel);
+    settings.setValue("UI/ShowMonitorPanel", m_showMonitorPanel);
+    settings.setValue("UI/MainWindowState", m_mainWindowState);
+    settings.setValue("UI/MainWindowGeometry", m_mainWindowGeometry);
+
     // 保存导出配置
     settings.setValue("Export/Directory", m_defaultExportDirectory);
     settings.setValue("Export/Format", m_defaultExportFormat);
@@ -155,6 +171,12 @@ void AppConfig::loadDefaults()
     m_temperatureAlarmThreshold = 80.0f;
     m_appTitle = "实时数据监控";
     m_windowSize = QSize(800, 600);
+    m_showDevicePanel = true;
+    m_showCommandPanel = true;
+    m_showPlotPanel = true;
+    m_showMonitorPanel = true;
+    m_mainWindowState.clear();
+    m_mainWindowGeometry.clear();
     m_logLevel = "INFO";
     m_currentStyle = LightStyle;  // 确保默认使用浅色主题
     m_defaultExportDirectory = "exports";
