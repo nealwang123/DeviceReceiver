@@ -4,6 +4,7 @@
 #include "IReceiverBackend.h"
 #include "SerialReceiver.h"
 #include "GrpcReceiverBackend.h"
+#include "StageReceiverBackend.h"
 #include "PlotWindow.h"
 #include "PlotWindowManager.h"
 #include "DataProcessor.h"
@@ -34,6 +35,24 @@ ApplicationController::ApplicationController(QObject *parent)
         qCritical() << "[ApplicationController] 构造函数未知异常";
         throw;
     }
+}
+
+void ApplicationController::applyReceiverBackendFromConfig()
+{
+    reloadRuntimeConfig();
+    if (m_config.backendType.compare(m_activeBackendType, Qt::CaseInsensitive) == 0) {
+        return;
+    }
+
+    qInfo() << "接收后端类型变更，重建实现:" << m_activeBackendType << "->" << m_config.backendType;
+    if (m_isRunning) {
+        stop();
+    }
+    if (!initReceiverBackend()) {
+        qCritical() << "applyReceiverBackendFromConfig: 重建接收后端失败";
+        return;
+    }
+    connectReceiverToMainWindow();
 }
 
 void ApplicationController::reloadRuntimeConfig()
@@ -141,14 +160,16 @@ void ApplicationController::start()
     if (m_serialReceiver) {
         m_isPaused = false;
         const bool isGrpcBackend = (m_config.backendType.compare("grpc", Qt::CaseInsensitive) == 0);
+        const bool isStageBackend = (m_config.backendType.compare("stage", Qt::CaseInsensitive) == 0);
+        const bool isGrpcLikeBackend = (isGrpcBackend || isStageBackend);
 
-        if (isGrpcBackend) {
+        if (isGrpcLikeBackend) {
             QMetaObject::invokeMethod(m_serialReceiver.get(), "setMockMode",
                                       Qt::BlockingQueuedConnection,
                                       Q_ARG(bool, m_config.useMockData));
         }
 
-        if (m_config.useMockData && !isGrpcBackend) {
+        if (m_config.useMockData && !isGrpcLikeBackend) {
             QMetaObject::invokeMethod(m_serialReceiver.get(), "startAcquisition",
                                       Qt::QueuedConnection,
                                       Q_ARG(int, m_config.mockDataIntervalMs));
@@ -159,7 +180,7 @@ void ApplicationController::start()
             while (true) {
                 bool connected = false;
                 QString endpoint;
-                if (isGrpcBackend) {
+                if (isGrpcLikeBackend) {
                     endpoint = m_config.grpcEndpoint;
                 } else {
                     endpoint = QString("%1|%2").arg(m_config.serialPort).arg(m_config.baudRate);
@@ -172,7 +193,7 @@ void ApplicationController::start()
 
                 if (connected) {
                     qInfo() << "后端连接成功" << m_config.backendType << endpoint;
-                    if (m_config.useMockData || isGrpcBackend) {
+                    if (m_config.useMockData || isGrpcLikeBackend) {
                         QMetaObject::invokeMethod(m_serialReceiver.get(), "startAcquisition",
                                                   Qt::QueuedConnection,
                                                   Q_ARG(int, m_config.mockDataIntervalMs));
@@ -196,7 +217,7 @@ void ApplicationController::start()
                 } else if (msgBox.clickedButton() == mockBtn) {
                     // 切换为模拟数据
                     m_config.useMockData = true;
-                    if (isGrpcBackend) {
+                    if (isGrpcLikeBackend) {
                         QMetaObject::invokeMethod(m_serialReceiver.get(), "setMockMode",
                                                   Qt::BlockingQueuedConnection,
                                                   Q_ARG(bool, true));
@@ -326,6 +347,8 @@ bool ApplicationController::initReceiverBackend()
     const QString backendType = m_config.backendType.trimmed().toLower();
     if (m_config.backendType.compare("grpc", Qt::CaseInsensitive) == 0) {
         m_serialReceiver.reset(new GrpcReceiverBackend);
+    } else if (m_config.backendType.compare("stage", Qt::CaseInsensitive) == 0) {
+        m_serialReceiver.reset(new StageReceiverBackend);
     } else {
         m_serialReceiver.reset(new SerialReceiver);
     }
@@ -464,6 +487,8 @@ void ApplicationController::connectReceiverToMainWindow()
         return;
     }
 
+    QObject::disconnect(m_serialReceiver.get(), nullptr, m_mainWindow.get(), nullptr);
+
     QObject::connect(m_serialReceiver.get(), &IReceiverBackend::dataReceived,
                      m_mainWindow.get(), &MainWindow::onDataReceived, Qt::QueuedConnection);
     QObject::connect(m_serialReceiver.get(), &IReceiverBackend::commandSent,
@@ -510,7 +535,10 @@ void ApplicationController::resumeAcquisition()
     QMetaObject::invokeMethod(m_serialReceiver.get(), "setPaused",
                               Qt::BlockingQueuedConnection,
                               Q_ARG(bool, false));
-    if (m_isRunning && (m_config.useMockData || m_config.backendType.compare("grpc", Qt::CaseInsensitive) == 0)) {
+    if (m_isRunning &&
+        (m_config.useMockData ||
+         m_config.backendType.compare("grpc", Qt::CaseInsensitive) == 0 ||
+         m_config.backendType.compare("stage", Qt::CaseInsensitive) == 0)) {
         QMetaObject::invokeMethod(m_serialReceiver.get(), "startAcquisition",
                                   Qt::QueuedConnection,
                                   Q_ARG(int, m_config.mockDataIntervalMs));

@@ -105,6 +105,9 @@ public:
     
     bool showMonitorPanel() const { return m_showMonitorPanel; }
     void setShowMonitorPanel(bool show) { m_showMonitorPanel = show; }
+
+    bool showStagePanel() const { return m_showStagePanel; }
+    void setShowStagePanel(bool show) { m_showStagePanel = show; }
     
     QByteArray mainWindowState() const { return m_mainWindowState; }
     void setMainWindowState(const QByteArray& state) { m_mainWindowState = state; }
@@ -199,6 +202,7 @@ private:
     bool m_showCommandPanel = true;
     bool m_showPlotPanel = true;
     bool m_showMonitorPanel = true;
+    bool m_showStagePanel = true;
     QByteArray m_mainWindowState;
     QByteArray m_mainWindowGeometry;
     

@@ -1,0 +1,99 @@
+﻿syntax = "proto3";
+option csharp_namespace = "TriAxis.Grpc";
+package stage;
+
+service StageService {
+  rpc Connect(ConnectRequest) returns (Result);
+  rpc Disconnect(Empty) returns (Result);
+
+  rpc GetPositions(Empty) returns (PositionsReply);
+  rpc PositionStream(PositionStreamRequest) returns (stream PositionsReply);
+
+  rpc Jog(JogRequest) returns (Result);
+  rpc MoveAbs(MoveAbsRequest) returns (Result);
+  rpc MoveRel(MoveRelRequest) returns (Result);
+
+  rpc SetSpeed(SetSpeedRequest) returns (Result);
+
+  rpc StartScan(ScanRequest) returns (Result);
+  rpc StopScan(Empty) returns (Result);
+  rpc GetScanStatus(Empty) returns (ScanStatusReply);
+}
+
+message Empty {}
+
+message Result {
+  bool ok = 1;
+  string message = 2;
+}
+
+message ConnectRequest {
+  string ip = 1;
+  int32 port = 2;
+}
+
+enum Axis {
+  X = 0;
+  Y = 1;
+  Z = 2;
+}
+
+message AxisValue {
+  int32 pulse = 1;
+  double mm = 2;
+}
+
+message PositionsReply {
+  AxisValue x = 1;
+  AxisValue y = 2;
+  AxisValue z = 3;
+  int64 unixMs = 4;
+}
+
+message PositionStreamRequest {
+  int32 intervalMs = 1;
+}
+
+message JogRequest {
+  Axis axis = 1;
+  bool plus = 2;
+  bool enable = 3;
+}
+
+message MoveAbsRequest {
+  double xMm = 1;
+  double yMm = 2;
+  double zMm = 3;
+  int32 timeoutMs = 4;
+}
+
+message MoveRelRequest {
+  Axis axis = 1;
+  double deltaMm = 2;
+  int32 timeoutMs = 3;
+}
+
+message SetSpeedRequest {
+  uint32 speedPulsePerSec = 1;
+  uint32 accelMs = 2;
+}
+
+enum ScanMode {
+  SNAKE = 0;
+  ALTERNATE_RETURN = 1;
+}
+
+message ScanRequest {
+  ScanMode mode = 1;
+  double xs = 2;
+  double xe = 3;
+  double ys = 4;
+  double ye = 5;
+  double yStep = 6;
+  double zFix = 7;
+}
+
+message ScanStatusReply {
+  bool running = 1;
+  string status = 2;
+}

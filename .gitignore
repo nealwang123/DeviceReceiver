@@ -3,6 +3,7 @@ build/
 debug/
 release/
 build-*/
+build_cmake/
 **/temp/
 
 # ===== Compiled binaries and objects =====

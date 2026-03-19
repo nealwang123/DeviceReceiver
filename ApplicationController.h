@@ -92,6 +92,10 @@ public:
      */
     void sendCommand(const QString& command, bool isHex = false);
     void reloadRuntimeConfig();
+    /**
+     * @brief 从 AppConfig 同步接收后端类型；若与当前实现不一致则停止采集并重建后端（须先 saveConfigFromUI）
+     */
+    void applyReceiverBackendFromConfig();
     bool exportCacheToFile(const QString& filePath,
                            const QString& format,
                            qint64 startTimeMs,
@@ -174,7 +178,7 @@ private:
         qint64 expireTimeMs = 60000;     // 数据过期时间（毫秒）
         QString serialPort = "COM3";     // 串口端口
         int baudRate = 115200;           // 波特率
-        QString backendType = "serial"; // serial/grpc
+        QString backendType = "serial"; // serial/grpc/stage
         QString grpcEndpoint = "127.0.0.1:50051";
         bool useMockData = true;         // 是否使用模拟数据
         int mockDataIntervalMs = 100;    // 模拟数据间隔（毫秒）

@@ -1,4 +1,4 @@
-﻿#ifndef MAINWINDOW_H
+#ifndef MAINWINDOW_H
 #define MAINWINDOW_H
 
 #include <QMainWindow>
@@ -29,12 +29,15 @@ class QSpinBox;
 class QLineEdit;
 class QProcess;
 class QJsonObject;
+class QDoubleSpinBox;
+class QGroupBox;
+class QShowEvent;
 
 /**
  * @brief 主界面窗口类，提供设备配置、控制、指令发送和窗口管理功能
  * 
  * 采用浮动面板布局，支持：
- * 1. 设备参数配置（串口、波特率、数据位、停止位、校验位）
+ * 1. 被测设备参数（串口/gRPC 等，与三轴台测试装置分离）
  * 2. 启动/停止控制
  * 3. 自定义串口指令发送（支持十六进制和ASCII）
  * 4. PlotWindow窗口管理
@@ -87,6 +90,8 @@ protected:
      */
     void closeEvent(QCloseEvent* event) override;
 
+    void showEvent(QShowEvent* event) override;
+
 private slots:
     // 设备控制槽函数
     void onConnectClicked();
@@ -115,6 +120,7 @@ private slots:
     void onShowCommandPanelChanged(bool show);
     void onShowPlotPanelChanged(bool show);
     void onShowMonitorPanelChanged(bool show);
+    void onShowStagePanelChanged(bool show);
     
     // （这些槽已移至 public slots）
     
@@ -212,7 +218,15 @@ private:
     void applyGrpcSelfTestLabelStates();
     void startGrpcSelfTest(bool autoTriggered);
     void handleGrpcBackendPacket(const QJsonObject& packet);
+    void handleStageBackendPacket(const QJsonObject& packet);
     void finalizeGrpcSelfTest();
+    bool isStageBackendSelected() const;
+    void updateStagePanelUiState();
+    void sendStageCommandText(const QString& command);
+    /// 配置或三轴台面板需要 Stage 后端时，向接收后端下拉框动态插入 Stage 项（设备面板默认不列出）
+    void ensureStageBackendComboEntry();
+    /// 主窗口限制在当前屏幕工作区内（横向/竖向不超出可用区域），并在换屏时更新
+    void applyScreenGeometryConstraints();
     void setGrpcTestServiceStatus(const QString& text, const QString& color);
     QString resolveGrpcTestServerExecutablePath() const;
     QString resolveGrpcTestServerScriptPath() const;
@@ -283,6 +297,53 @@ private:
     QLabel* m_grpcSelfTestRxStatusLabel;
     QLabel* m_grpcModeSwitchStatusLabel;
     QLabel* m_grpcPeriodicDataStatusLabel;
+
+    // Stage 专用控制组件
+    QLineEdit* m_stageEndpointEdit = nullptr;
+    QPushButton* m_stageApplyEndpointButton = nullptr;
+    QPushButton* m_stageUseStageBackendButton = nullptr;
+    QPushButton* m_stageConnectButton = nullptr;
+    QPushButton* m_stageDisconnectButton = nullptr;
+    QLabel* m_stageBackendStatusLabel = nullptr;
+    QLabel* m_stagePositionLabel = nullptr;
+    QLabel* m_stageScanStatusLabel = nullptr;
+    QLabel* m_stageCommandResultLabel = nullptr;
+    QSpinBox* m_stageStreamIntervalSpin = nullptr;
+    QPushButton* m_stageGetPositionButton = nullptr;
+    QPushButton* m_stageStartStreamButton = nullptr;
+    QPushButton* m_stageStopStreamButton = nullptr;
+    QComboBox* m_stageJogAxisCombo = nullptr;
+    QComboBox* m_stageJogDirectionCombo = nullptr;
+    QPushButton* m_stageJogStartButton = nullptr;
+    QPushButton* m_stageJogStopButton = nullptr;
+    QDoubleSpinBox* m_stageMoveAbsXSpin = nullptr;
+    QDoubleSpinBox* m_stageMoveAbsYSpin = nullptr;
+    QDoubleSpinBox* m_stageMoveAbsZSpin = nullptr;
+    QSpinBox* m_stageMoveTimeoutSpin = nullptr;
+    QPushButton* m_stageMoveAbsButton = nullptr;
+    QComboBox* m_stageMoveRelAxisCombo = nullptr;
+    QDoubleSpinBox* m_stageMoveRelDeltaSpin = nullptr;
+    QPushButton* m_stageMoveRelButton = nullptr;
+    QSpinBox* m_stageSpeedSpin = nullptr;
+    QSpinBox* m_stageAccelSpin = nullptr;
+    QPushButton* m_stageSetSpeedButton = nullptr;
+    QComboBox* m_stageScanModeCombo = nullptr;
+    QDoubleSpinBox* m_stageScanXsSpin = nullptr;
+    QDoubleSpinBox* m_stageScanXeSpin = nullptr;
+    QDoubleSpinBox* m_stageScanYsSpin = nullptr;
+    QDoubleSpinBox* m_stageScanYeSpin = nullptr;
+    QDoubleSpinBox* m_stageScanStepSpin = nullptr;
+    QDoubleSpinBox* m_stageScanZFixSpin = nullptr;
+    QPushButton* m_stageStartScanButton = nullptr;
+    QPushButton* m_stageStopScanButton = nullptr;
+    QPushButton* m_stageScanStatusButton = nullptr;
+    QLineEdit* m_stageCustomCommandEdit = nullptr;
+    QPushButton* m_stageCustomCommandSendButton = nullptr;
+    QPushButton* m_stageCommandHelpButton = nullptr;
+
+    /// Stage 后端下曾挂起 HEX 勾选状态，切回其它后端时恢复
+    bool m_hexFormatSuspendedForStage = false;
+    bool m_hexFormatCheckedBeforeStage = false;
     
     // 指令发送组件
     QTextEdit* m_commandInput;
@@ -309,9 +370,15 @@ private:
     
     // 浮动面板
     QDockWidget* m_devicePanel;
+    QDockWidget* m_stagePanel = nullptr;
     QDockWidget* m_commandPanel;
     QDockWidget* m_plotPanel;
     QDockWidget* m_monitorPanel;
+
+    /// 视图菜单「三轴台测试装置」项，用于与停靠栏关闭按钮同步勾选状态
+    QAction* m_showStagePanelAction = nullptr;
+
+    QGroupBox* m_grpcTestGroup = nullptr;
     
     // 定时器
     QTimer* m_updateTimer;
@@ -319,6 +386,7 @@ private:
     
     // 状态变量
     bool m_isConnected;
+    bool m_screenGeometryScreenHooked = false;
     int m_frameCount;
     int m_alarmCount;
     qint64 m_lastUpdateTime;

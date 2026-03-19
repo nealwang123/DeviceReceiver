@@ -1,4 +1,4 @@
-﻿#include "MainWindow.h"
+#include "MainWindow.h"
 #include "ApplicationController.h"
 #include "PlotWindowManager.h"
 #include "PlotWindow.h"
@@ -33,6 +33,7 @@
 #include <QCheckBox>
 #include <QComboBox>
 #include <QSpinBox>
+#include <QDoubleSpinBox>
 #include <QLineEdit>
 #include <QListWidget>
 #include <QInputDialog>
@@ -41,7 +42,11 @@
 #include <QDateTimeEdit>
 #include <QDir>
 #include <QRegularExpression>
+#include <QSignalBlocker>
+#include <QScrollArea>
+#include <QFrame>
 #include <QWindow>
+#include <QShowEvent>
 #include <cmath>
 
 #ifndef QT_COMPILE_FOR_WASM
@@ -246,6 +251,7 @@ void MainWindow::updateConnectionStatus(bool connected)
         });
     }
 
+    updateStagePanelUiState();
     updateGrpcTestUiState();
 }
 
@@ -277,6 +283,67 @@ void MainWindow::closeEvent(QCloseEvent* event)
     QMainWindow::closeEvent(event);
 }
 
+void MainWindow::showEvent(QShowEvent* event)
+{
+    QMainWindow::showEvent(event);
+    if (QWindow* wh = windowHandle()) {
+        if (!m_screenGeometryScreenHooked) {
+            connect(wh, &QWindow::screenChanged, this, &MainWindow::applyScreenGeometryConstraints);
+            m_screenGeometryScreenHooked = true;
+        }
+    }
+    applyScreenGeometryConstraints();
+}
+
+void MainWindow::applyScreenGeometryConstraints()
+{
+    if (isFullScreen()) {
+        setMaximumSize(QWIDGETSIZE_MAX, QWIDGETSIZE_MAX);
+        return;
+    }
+
+    QScreen* scr = nullptr;
+    if (QWindow* wh = windowHandle()) {
+        scr = wh->screen();
+    }
+    if (!scr) {
+        scr = QGuiApplication::primaryScreen();
+    }
+    if (!scr) {
+        return;
+    }
+
+    const QRect available = scr->availableGeometry();
+    setMaximumSize(available.size());
+
+    if (isMaximized()) {
+        return;
+    }
+
+    QRect geo = geometry();
+    const QSize minimumHint = minimumSizeHint().expandedTo(minimumSize());
+    const int minWidth = qMin(qMax(320, minimumHint.width()), available.width());
+    const int minHeight = qMin(qMax(320, minimumHint.height()), available.height());
+
+    geo.setWidth(qBound(minWidth, geo.width(), available.width()));
+    geo.setHeight(qBound(minHeight, geo.height(), available.height()));
+
+    if (geo.left() < available.left()) {
+        geo.moveLeft(available.left());
+    }
+    if (geo.top() < available.top()) {
+        geo.moveTop(available.top());
+    }
+    if (geo.right() > available.right()) {
+        geo.moveLeft(available.right() - geo.width() + 1);
+    }
+    if (geo.bottom() > available.bottom()) {
+        geo.moveTop(available.bottom() - geo.height() + 1);
+    }
+
+    setGeometry(geo);
+}
+
 void MainWindow::initUI()
 {
     qDebug() << "[MainWindow::initUI] 开始";
@@ -295,20 +362,24 @@ void MainWindow::initUI()
         
         // 视图菜单
         QMenu* viewMenu = menuBar->addMenu("视图(&V)");
-        QAction* showDeviceAction = viewMenu->addAction("设备面板(&D)");
+        QAction* showDeviceAction = viewMenu->addAction(QStringLiteral("被测设备面板(&D)"));
         QAction* showCommandAction = viewMenu->addAction("指令面板(&C)");
         QAction* showPlotAction = viewMenu->addAction("绘图面板(&P)");
+        QAction* showStageAction = viewMenu->addAction(QStringLiteral("三轴台测试装置(&S)"));
         QAction* showMonitorAction = viewMenu->addAction("监控面板(&M)");
         
         showDeviceAction->setCheckable(true);
         showCommandAction->setCheckable(true);
         showPlotAction->setCheckable(true);
+        showStageAction->setCheckable(true);
         showMonitorAction->setCheckable(true);
         
         connect(showDeviceAction, &QAction::toggled, this, &MainWindow::onShowDevicePanelChanged);
         connect(showCommandAction, &QAction::toggled, this, &MainWindow::onShowCommandPanelChanged);
         connect(showPlotAction, &QAction::toggled, this, &MainWindow::onShowPlotPanelChanged);
+        connect(showStageAction, &QAction::toggled, this, &MainWindow::onShowStagePanelChanged);
         connect(showMonitorAction, &QAction::toggled, this, &MainWindow::onShowMonitorPanelChanged);
+        m_showStagePanelAction = showStageAction;
         
         // 窗口菜单
         QMenu* windowMenu = menuBar->addMenu("窗口(&W)");
@@ -354,23 +425,26 @@ void MainWindow::initUI()
         
         // 创建浮动面板
         
-        // 1. 设备配置面板
-        m_devicePanel = new QDockWidget("设备配置", this);
+        // 1. 被测设备（DUT）— 与右侧三轴台测试装置（gRPC）概念分离
+        m_devicePanel = new QDockWidget(QStringLiteral("被测设备"), this);
         m_devicePanel->setAllowedAreas(Qt::LeftDockWidgetArea | Qt::RightDockWidgetArea);
         
         QWidget* deviceWidget = new QWidget();
         QVBoxLayout* deviceLayout = new QVBoxLayout(deviceWidget);
         
-        // 连接配置组
-        QGroupBox* serialGroup = new QGroupBox("连接配置");
+        QGroupBox* serialGroup = new QGroupBox(QStringLiteral("被测设备连接"));
+        serialGroup->setToolTip(
+            QStringLiteral("配置被测设备（DUT）的数据来源：串口或设备数据 gRPC。\n"
+                          "与右侧「三轴台测试装置」无关；后者为工装/定位，走独立 gRPC。"));
         QFormLayout* serialLayout = new QFormLayout(serialGroup);
         
         m_serialPortCombo = new QComboBox();
         m_backendTypeCombo = new QComboBox();
-        m_backendTypeCombo->addItem("串口 (Serial)", "serial");
-        m_backendTypeCombo->addItem("gRPC Client", "grpc");
+        m_backendTypeCombo->addItem(QStringLiteral("串口（被测设备）"), "serial");
+        m_backendTypeCombo->addItem(QStringLiteral("gRPC（被测设备数据）"), "grpc");
+        // 三轴台测试装置（Stage gRPC）由右侧面板切换采集源，不在此列出
         m_grpcEndpointEdit = new QLineEdit();
-        m_grpcEndpointEdit->setPlaceholderText("127.0.0.1:50051");
+        m_grpcEndpointEdit->setPlaceholderText(QStringLiteral("被测设备 gRPC，如 127.0.0.1:50051"));
         m_baudRateCombo = new QComboBox();
         m_dataBitsCombo = new QComboBox();
         m_stopBitsCombo = new QComboBox();
@@ -394,8 +468,8 @@ void MainWindow::initUI()
             }
         };
         
-        serialLayout->addRow("接收后端:", m_backendTypeCombo);
-        serialLayout->addRow("gRPC地址:", m_grpcEndpointEdit);
+        serialLayout->addRow(QStringLiteral("数据来源:"), m_backendTypeCombo);
+        serialLayout->addRow(QStringLiteral("被测设备 gRPC:"), m_grpcEndpointEdit);
         addSerialOnlyRow("端口:", m_serialPortCombo);
         addSerialOnlyRow("波特率:", m_baudRateCombo);
         addSerialOnlyRow("数据位:", m_dataBitsCombo);
@@ -420,7 +494,8 @@ void MainWindow::initUI()
         mockLayout->addLayout(intervalLayout);
         
         // 控制按钮组
-        QGroupBox* controlGroup = new QGroupBox("设备控制");
+        QGroupBox* controlGroup = new QGroupBox(QStringLiteral("被测设备采集"));
+        controlGroup->setToolTip(QStringLiteral("启动/停止的是主数据通道（被测设备或已切换为三轴台时的采集）"));
         QVBoxLayout* controlLayout = new QVBoxLayout(controlGroup);
         QHBoxLayout* controlRow1Layout = new QHBoxLayout();
         QHBoxLayout* controlRow2Layout = new QHBoxLayout();
@@ -457,7 +532,8 @@ void MainWindow::initUI()
         controlLayout->addLayout(controlRow2Layout);
         controlLayout->addLayout(controlStatusLayout);
 
-        QGroupBox* grpcTestGroup = new QGroupBox("gRPC 测试验证");
+        QGroupBox* grpcTestGroup = new QGroupBox(QStringLiteral("被测设备 gRPC 测试验证"));
+        m_grpcTestGroup = grpcTestGroup;
         QVBoxLayout* grpcTestLayout = new QVBoxLayout(grpcTestGroup);
 
         QHBoxLayout* grpcServiceLayout = new QHBoxLayout();
@@ -537,8 +613,292 @@ void MainWindow::initUI()
         
         m_devicePanel->setWidget(deviceWidget);
         addDockWidget(Qt::LeftDockWidgetArea, m_devicePanel);
+
+        // 2. 三轴台测试装置（工装，gRPC StageService）— 非被测设备
+        m_stagePanel = new QDockWidget(QStringLiteral("三轴台测试装置"), this);
+        m_stagePanel->setAllowedAreas(Qt::RightDockWidgetArea);
+
+        QWidget* stageWidget = new QWidget();
+        stageWidget->setMinimumWidth(0);
+        stageWidget->setSizePolicy(QSizePolicy::Preferred, QSizePolicy::Preferred);
+        QVBoxLayout* stageLayout = new QVBoxLayout(stageWidget);
+        stageLayout->setContentsMargins(4, 2, 4, 4);
+        stageLayout->setSpacing(2);
+
+        auto addStageHeading = [stageLayout](const QString& title, const QString& tip = QString()) {
+            QLabel* h = new QLabel(title);
+            QFont f = h->font();
+            f.setBold(true);
+            h->setFont(f);
+            h->setContentsMargins(0, 4, 0, 0);
+            h->setWordWrap(true);
+            h->setSizePolicy(QSizePolicy::Preferred, QSizePolicy::Preferred);
+            if (!tip.isEmpty()) {
+                h->setToolTip(tip);
+            }
+            stageLayout->addWidget(h);
+        };
+
+        auto createStageDoubleSpin = [](double minValue,
+                                        double maxValue,
+                                        double step,
+                                        double defaultValue,
+                                        int decimals = 3) {
+            QDoubleSpinBox* spin = new QDoubleSpinBox();
+            spin->setDecimals(decimals);
+            spin->setRange(minValue, maxValue);
+            spin->setSingleStep(step);
+            spin->setValue(defaultValue);
+            return spin;
+        };
+
+        addStageHeading(QStringLiteral("gRPC 连接"),
+                        QStringLiteral("三轴台工装 gRPC 地址 host:port；若与台下位机 TCP 不同，使用 host:port|stageIp:stagePort"));
+        m_stageUseStageBackendButton = new QPushButton(QStringLiteral("数据采集改为三轴台（测试装置）"));
+        m_stageUseStageBackendButton->setMinimumWidth(0);
+        m_stageUseStageBackendButton->setSizePolicy(QSizePolicy::MinimumExpanding, QSizePolicy::Fixed);
+        m_stageUseStageBackendButton->setToolTip(
+            QStringLiteral("应用主采集源切换为三轴台工装的 gRPC 数据流。\n"
+                          "左侧仅配置被测设备（DUT），与三轴台不是同一对象。"));
+        stageLayout->addWidget(m_stageUseStageBackendButton);
+        QHBoxLayout* stageEndpointLayout = new QHBoxLayout();
+        stageEndpointLayout->setSpacing(4);
+        stageEndpointLayout->addWidget(new QLabel(QStringLiteral("地址:")));
+        m_stageEndpointEdit = new QLineEdit();
+        m_stageEndpointEdit->setPlaceholderText(QStringLiteral("host:port 或 host:port|ip:port"));
+        m_stageEndpointEdit->setToolTip(
+            QStringLiteral("与左侧「被测设备 gRPC」共用同一配置项保存；两路地址若不同需后续版本拆分为独立配置键。"));
+        m_stageApplyEndpointButton = new QPushButton(QStringLiteral("应用"));
+        stageEndpointLayout->addWidget(m_stageEndpointEdit, 1);
+        stageEndpointLayout->addWidget(m_stageApplyEndpointButton);
+
+        QHBoxLayout* stageConnectRowLayout = new QHBoxLayout();
+        stageConnectRowLayout->setSpacing(4);
+        m_stageConnectButton = new QPushButton(QStringLiteral("连接"));
+        m_stageDisconnectButton = new QPushButton(QStringLiteral("断开"));
+        stageConnectRowLayout->addWidget(m_stageConnectButton);
+        stageConnectRowLayout->addWidget(m_stageDisconnectButton);
+        stageConnectRowLayout->addStretch();
+
+        m_stageBackendStatusLabel = new QLabel(QStringLiteral("状态: 未连接"));
+        m_stageBackendStatusLabel->setStyleSheet(QStringLiteral("color: gray;"));
+        m_stageBackendStatusLabel->setWordWrap(true);
+
+        stageLayout->addLayout(stageEndpointLayout);
+        stageLayout->addLayout(stageConnectRowLayout);
+        stageLayout->addWidget(m_stageBackendStatusLabel);
+
+        addStageHeading(QStringLiteral("位置与流"),
+                        QStringLiteral("读取一次、或按间隔订阅 PositionStream；JSON 实时包带 source/unixMs"));
+        QHBoxLayout* stageStreamLayout = new QHBoxLayout();
+        stageStreamLayout->setSpacing(4);
+        stageStreamLayout->addWidget(new QLabel(QStringLiteral("流间隔:")));
+        m_stageStreamIntervalSpin = new QSpinBox();
+        m_stageStreamIntervalSpin->setRange(10, 5000);
+        m_stageStreamIntervalSpin->setValue(100);
+        m_stageStreamIntervalSpin->setSuffix(QStringLiteral(" ms"));
+        m_stageStreamIntervalSpin->setMaximumWidth(90);
+        stageStreamLayout->addWidget(m_stageStreamIntervalSpin);
+        stageStreamLayout->addStretch();
+
+        QHBoxLayout* stagePositionButtonsLayout = new QHBoxLayout();
+        stagePositionButtonsLayout->setSpacing(4);
+        m_stageGetPositionButton = new QPushButton(QStringLiteral("读位置"));
+        m_stageStartStreamButton = new QPushButton(QStringLiteral("开流"));
+        m_stageStopStreamButton = new QPushButton(QStringLiteral("停流"));
+        stagePositionButtonsLayout->addWidget(m_stageGetPositionButton);
+        stagePositionButtonsLayout->addWidget(m_stageStartStreamButton);
+        stagePositionButtonsLayout->addWidget(m_stageStopStreamButton);
+        stagePositionButtonsLayout->addStretch();
+
+        m_stagePositionLabel = new QLabel(QStringLiteral("X: -- | Y: -- | Z: --"));
+        m_stagePositionLabel->setWordWrap(true);
+
+        stageLayout->addLayout(stageStreamLayout);
+        stageLayout->addLayout(stagePositionButtonsLayout);
+        stageLayout->addWidget(m_stagePositionLabel);
+
+        addStageHeading(QStringLiteral("运动"),
+                        QStringLiteral("Jog / MoveAbs / MoveRel 对应 StageService RPC"));
+        QHBoxLayout* stageJogLayout = new QHBoxLayout();
+        stageJogLayout->setSpacing(4);
+        stageJogLayout->addWidget(new QLabel(QStringLiteral("Jog")));
+        m_stageJogAxisCombo = new QComboBox();
+        m_stageJogAxisCombo->addItem(QStringLiteral("X"), QStringLiteral("x"));
+        m_stageJogAxisCombo->addItem(QStringLiteral("Y"), QStringLiteral("y"));
+        m_stageJogAxisCombo->addItem(QStringLiteral("Z"), QStringLiteral("z"));
+        m_stageJogAxisCombo->setMaximumWidth(48);
+        m_stageJogDirectionCombo = new QComboBox();
+        m_stageJogDirectionCombo->addItem(QStringLiteral("+"), QStringLiteral("+"));
+        m_stageJogDirectionCombo->addItem(QStringLiteral("-"), QStringLiteral("-"));
+        m_stageJogDirectionCombo->setMaximumWidth(44);
+        m_stageJogStartButton = new QPushButton(QStringLiteral("始"));
+        m_stageJogStopButton = new QPushButton(QStringLiteral("止"));
+        m_stageJogStartButton->setMaximumWidth(40);
+        m_stageJogStopButton->setMaximumWidth(40);
+        stageJogLayout->addWidget(m_stageJogAxisCombo);
+        stageJogLayout->addWidget(m_stageJogDirectionCombo);
+        stageJogLayout->addWidget(m_stageJogStartButton);
+        stageJogLayout->addWidget(m_stageJogStopButton);
+        stageJogLayout->addStretch();
+
+        QGridLayout* stageAbsLayout = new QGridLayout();
+        stageAbsLayout->setHorizontalSpacing(4);
+        stageAbsLayout->setVerticalSpacing(2);
+        stageAbsLayout->addWidget(new QLabel(QStringLiteral("Abs")), 0, 0);
+        stageAbsLayout->addWidget(new QLabel(QStringLiteral("X")), 0, 1);
+        stageAbsLayout->addWidget(new QLabel(QStringLiteral("Y")), 0, 2);
+        stageAbsLayout->addWidget(new QLabel(QStringLiteral("Z")), 0, 3);
+        m_stageMoveAbsXSpin = createStageDoubleSpin(-10000.0, 10000.0, 0.1, 0.0);
+        m_stageMoveAbsYSpin = createStageDoubleSpin(-10000.0, 10000.0, 0.1, 0.0);
+        m_stageMoveAbsZSpin = createStageDoubleSpin(-10000.0, 10000.0, 0.1, 0.0);
+        for (QDoubleSpinBox* s : {m_stageMoveAbsXSpin, m_stageMoveAbsYSpin, m_stageMoveAbsZSpin}) {
+            s->setMaximumWidth(88);
+        }
+        stageAbsLayout->addWidget(m_stageMoveAbsXSpin, 1, 1);
+        stageAbsLayout->addWidget(m_stageMoveAbsYSpin, 1, 2);
+        stageAbsLayout->addWidget(m_stageMoveAbsZSpin, 1, 3);
+
+        QHBoxLayout* stageAbsActionLayout = new QHBoxLayout();
+        stageAbsActionLayout->setSpacing(4);
+        stageAbsActionLayout->addWidget(new QLabel(QStringLiteral("超时")));
+        m_stageMoveTimeoutSpin = new QSpinBox();
+        m_stageMoveTimeoutSpin->setRange(100, 600000);
+        m_stageMoveTimeoutSpin->setValue(10000);
+        m_stageMoveTimeoutSpin->setMaximumWidth(90);
+        m_stageMoveTimeoutSpin->setSuffix(QStringLiteral(" ms"));
+        m_stageMoveAbsButton = new QPushButton(QStringLiteral("MoveAbs"));
+        stageAbsActionLayout->addWidget(m_stageMoveTimeoutSpin);
+        stageAbsActionLayout->addWidget(m_stageMoveAbsButton);
+        stageAbsActionLayout->addStretch();
+
+        QHBoxLayout* stageRelLayout = new QHBoxLayout();
+        stageRelLayout->setSpacing(4);
+        stageRelLayout->addWidget(new QLabel(QStringLiteral("Rel")));
+        m_stageMoveRelAxisCombo = new QComboBox();
+        m_stageMoveRelAxisCombo->addItem(QStringLiteral("X"), QStringLiteral("x"));
+        m_stageMoveRelAxisCombo->addItem(QStringLiteral("Y"), QStringLiteral("y"));
+        m_stageMoveRelAxisCombo->addItem(QStringLiteral("Z"), QStringLiteral("z"));
+        m_stageMoveRelAxisCombo->setMaximumWidth(48);
+        m_stageMoveRelDeltaSpin = createStageDoubleSpin(-10000.0, 10000.0, 0.1, 1.0);
+        m_stageMoveRelDeltaSpin->setMaximumWidth(88);
+        m_stageMoveRelButton = new QPushButton(QStringLiteral("MoveRel"));
+        stageRelLayout->addWidget(m_stageMoveRelAxisCombo);
+        stageRelLayout->addWidget(m_stageMoveRelDeltaSpin);
+        stageRelLayout->addWidget(m_stageMoveRelButton);
+        stageRelLayout->addStretch();
+
+        stageLayout->addLayout(stageJogLayout);
+        stageLayout->addLayout(stageAbsLayout);
+        stageLayout->addLayout(stageAbsActionLayout);
+        stageLayout->addLayout(stageRelLayout);
+
+        addStageHeading(QStringLiteral("速度"),
+                        QStringLiteral("SetSpeed：脉冲/秒与加减速时间(ms)"));
+        QHBoxLayout* stageSpeedLayout = new QHBoxLayout();
+        stageSpeedLayout->setSpacing(4);
+        stageSpeedLayout->addWidget(new QLabel(QStringLiteral("脉冲/s")));
+        m_stageSpeedSpin = new QSpinBox();
+        m_stageSpeedSpin->setRange(1, 10000000);
+        m_stageSpeedSpin->setValue(20000);
+        m_stageSpeedSpin->setMaximumWidth(100);
+        stageSpeedLayout->addWidget(m_stageSpeedSpin);
+        stageSpeedLayout->addWidget(new QLabel(QStringLiteral("加速ms")));
+        m_stageAccelSpin = new QSpinBox();
+        m_stageAccelSpin->setRange(0, 600000);
+        m_stageAccelSpin->setValue(100);
+        m_stageAccelSpin->setMaximumWidth(80);
+        stageSpeedLayout->addWidget(m_stageAccelSpin);
+        m_stageSetSpeedButton = new QPushButton(QStringLiteral("设速"));
+        stageSpeedLayout->addWidget(m_stageSetSpeedButton);
+        stageSpeedLayout->addStretch();
+
+        stageLayout->addLayout(stageSpeedLayout);
+
+        addStageHeading(QStringLiteral("扫描"),
+                        QStringLiteral("StartScan / StopScan / GetScanStatus"));
+        QFormLayout* stageScanFormLayout = new QFormLayout();
+        stageScanFormLayout->setSpacing(2);
+        stageScanFormLayout->setContentsMargins(0, 0, 0, 0);
+        stageScanFormLayout->setFieldGrowthPolicy(QFormLayout::ExpandingFieldsGrow);
+
+        m_stageScanModeCombo = new QComboBox();
+        m_stageScanModeCombo->addItem(QStringLiteral("蛇形"), QStringLiteral("snake"));
+        m_stageScanModeCombo->addItem(QStringLiteral("往返"), QStringLiteral("alternate_return"));
+        m_stageScanXsSpin = createStageDoubleSpin(-10000.0, 10000.0, 0.1, 0.0);
+        m_stageScanXeSpin = createStageDoubleSpin(-10000.0, 10000.0, 0.1, 10.0);
+        m_stageScanYsSpin = createStageDoubleSpin(-10000.0, 10000.0, 0.1, 0.0);
+        m_stageScanYeSpin = createStageDoubleSpin(-10000.0, 10000.0, 0.1, 10.0);
+        m_stageScanStepSpin = createStageDoubleSpin(0.001, 10000.0, 0.1, 1.0);
+        m_stageScanZFixSpin = createStageDoubleSpin(-10000.0, 10000.0, 0.1, 0.0);
+        for (QDoubleSpinBox* s : {m_stageScanXsSpin,
+                                m_stageScanXeSpin,
+                                m_stageScanYsSpin,
+                                m_stageScanYeSpin,
+                                m_stageScanStepSpin,
+                                m_stageScanZFixSpin}) {
+            s->setMaximumWidth(96);
+        }
+
+        stageScanFormLayout->addRow(QStringLiteral("模式"), m_stageScanModeCombo);
+        stageScanFormLayout->addRow(QStringLiteral("Xs"), m_stageScanXsSpin);
+        stageScanFormLayout->addRow(QStringLiteral("Xe"), m_stageScanXeSpin);
+        stageScanFormLayout->addRow(QStringLiteral("Ys"), m_stageScanYsSpin);
+        stageScanFormLayout->addRow(QStringLiteral("Ye"), m_stageScanYeSpin);
+        stageScanFormLayout->addRow(QStringLiteral("步长"), m_stageScanStepSpin);
+        stageScanFormLayout->addRow(QStringLiteral("Z"), m_stageScanZFixSpin);
+
+        QHBoxLayout* stageScanActionLayout = new QHBoxLayout();
+        stageScanActionLayout->setSpacing(4);
+        m_stageStartScanButton = new QPushButton(QStringLiteral("开扫"));
+        m_stageStopScanButton = new QPushButton(QStringLiteral("停扫"));
+        m_stageScanStatusButton = new QPushButton(QStringLiteral("状态"));
+        stageScanActionLayout->addWidget(m_stageStartScanButton);
+        stageScanActionLayout->addWidget(m_stageStopScanButton);
+        stageScanActionLayout->addWidget(m_stageScanStatusButton);
+        stageScanActionLayout->addStretch();
+
+        m_stageScanStatusLabel = new QLabel(QStringLiteral("扫描: —"));
+        m_stageCommandResultLabel = new QLabel(QStringLiteral("结果: —"));
+        m_stageCommandResultLabel->setWordWrap(true);
+
+        stageLayout->addLayout(stageScanFormLayout);
+        stageLayout->addLayout(stageScanActionLayout);
+        stageLayout->addWidget(m_stageScanStatusLabel);
+        stageLayout->addWidget(m_stageCommandResultLabel);
+
+        addStageHeading(QStringLiteral("文本指令"),
+                        QStringLiteral("发往三轴台工装 gRPC 的文本命令；勿使用底部「HEX发送」。输入 help 查看列表。"));
+        m_stageCustomCommandEdit = new QLineEdit();
+        m_stageCustomCommandEdit->setPlaceholderText(QStringLiteral("get_positions / help / …"));
+        QHBoxLayout* stageCustomCmdButtons = new QHBoxLayout();
+        stageCustomCmdButtons->setSpacing(4);
+        m_stageCustomCommandSendButton = new QPushButton(QStringLiteral("发送"));
+        m_stageCommandHelpButton = new QPushButton(QStringLiteral("帮助"));
+        stageCustomCmdButtons->addWidget(m_stageCustomCommandSendButton);
+        stageCustomCmdButtons->addWidget(m_stageCommandHelpButton);
+        stageCustomCmdButtons->addStretch();
+        stageLayout->addWidget(m_stageCustomCommandEdit);
+        stageLayout->addLayout(stageCustomCmdButtons);
+
+        auto* stageScroll = new QScrollArea();
+        stageScroll->setWidgetResizable(true);
+        stageScroll->setFrameShape(QFrame::NoFrame);
+        // 停靠条内横向不滚动：由换行与弹性布局适配窄宽度；纵向过长由滚动条承担
+        stageScroll->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+        stageScroll->setVerticalScrollBarPolicy(Qt::ScrollBarAsNeeded);
+        stageScroll->setWidget(stageWidget);
+
+        m_stagePanel->setWidget(stageScroll);
+        connect(m_stagePanel, &QDockWidget::visibilityChanged, this, [this](bool visible) {
+            if (!m_showStagePanelAction || m_showStagePanelAction->isChecked() == visible) {
+                return;
+            }
+            const QSignalBlocker blocker(m_showStagePanelAction);
+            m_showStagePanelAction->setChecked(visible);
+        });
         
-        // 2. 指令发送面板
+        // 3. 指令发送面板
         m_commandPanel = new QDockWidget("指令发送", this);
         m_commandPanel->setAllowedAreas(Qt::LeftDockWidgetArea | Qt::RightDockWidgetArea);
         
@@ -587,8 +947,11 @@ void MainWindow::initUI()
         
         m_commandPanel->setWidget(commandWidget);
         addDockWidget(Qt::RightDockWidgetArea, m_commandPanel);
+        addDockWidget(Qt::RightDockWidgetArea, m_stagePanel);
+        tabifyDockWidget(m_commandPanel, m_stagePanel);
+        m_commandPanel->raise();
         
-        // 3. 绘图管理面板
+        // 4. 绘图管理面板
         m_plotPanel = new QDockWidget("绘图管理", this);
         m_plotPanel->setAllowedAreas(Qt::LeftDockWidgetArea | Qt::RightDockWidgetArea);
         
@@ -633,11 +996,11 @@ void MainWindow::initUI()
         m_plotPanel->setWidget(plotWidget);
         addDockWidget(Qt::LeftDockWidgetArea, m_plotPanel);
 
-        // 左侧面板采用标签页管理，避免并排后显示不全
+        // 左侧：被测设备 + 绘图；右侧：三轴台测试装置（与 DUT 分离）
         tabifyDockWidget(m_devicePanel, m_plotPanel);
         m_devicePanel->raise();
         
-        // 4. 数据监控面板
+        // 5. 数据监控面板
         m_monitorPanel = new QDockWidget("数据监控", this);
         m_monitorPanel->setAllowedAreas(Qt::BottomDockWidgetArea);
         
@@ -696,11 +1059,15 @@ void MainWindow::initUI()
             showDeviceAction->setChecked(config->showDevicePanel());
             showCommandAction->setChecked(config->showCommandPanel());
             showPlotAction->setChecked(config->showPlotPanel());
+            showStageAction->setChecked(config->showStagePanel());
             showMonitorAction->setChecked(config->showMonitorPanel());
             
             m_devicePanel->setVisible(config->showDevicePanel());
             m_commandPanel->setVisible(config->showCommandPanel());
             m_plotPanel->setVisible(config->showPlotPanel());
+            if (m_stagePanel) {
+                m_stagePanel->setVisible(config->showStagePanel());
+            }
             m_monitorPanel->setVisible(config->showMonitorPanel());
 
             if (m_devicePanel->isVisible()) {
@@ -708,43 +1075,13 @@ void MainWindow::initUI()
             } else if (m_plotPanel->isVisible()) {
                 m_plotPanel->raise();
             }
-
-            if (!isMaximized() && !isFullScreen()) {
-                QScreen* screen = nullptr;
-                if (windowHandle()) {
-                    screen = windowHandle()->screen();
-                }
-                if (!screen) {
-                    screen = QGuiApplication::primaryScreen();
-                }
-
-                if (screen) {
-                    const QRect available = screen->availableGeometry();
-                    QRect target = geometry();
-                    const QSize minimumHint = minimumSizeHint().expandedTo(minimumSize());
-
-                    const int minWidth = qMin(qMax(320, minimumHint.width()), available.width());
-                    const int minHeight = qMin(qMax(320, minimumHint.height()), available.height());
-
-                    target.setWidth(qMax(minWidth, qMin(target.width(), available.width())));
-                    target.setHeight(qMax(minHeight, qMin(target.height(), available.height())));
-
-                    if (target.left() < available.left()) {
-                        target.moveLeft(available.left());
-                    }
-                    if (target.top() < available.top()) {
-                        target.moveTop(available.top());
-                    }
-                    if (target.right() > available.right()) {
-                        target.moveLeft(available.right() - target.width() + 1);
-                    }
-                    if (target.bottom() > available.bottom()) {
-                        target.moveTop(available.bottom() - target.height() + 1);
-                    }
-
-                    setGeometry(target);
-                }
+            if (m_commandPanel && m_commandPanel->isVisible()) {
+                m_commandPanel->raise();
+            } else if (m_stagePanel && m_stagePanel->isVisible()) {
+                m_stagePanel->raise();
             }
+
+            applyScreenGeometryConstraints();
         }
         qDebug() << "[MainWindow::initUI] 完成";
     } catch (const std::exception& e) {
@@ -767,6 +1104,167 @@ void MainWindow::initConnections()
     connect(m_useMockDataCheck, &QCheckBox::toggled, this, &MainWindow::onUseMockDataChanged);
         connect(m_backendTypeCombo, QOverload<int>::of(&QComboBox::currentIndexChanged),
             this, &MainWindow::onBackendTypeChanged);
+
+    connect(m_grpcEndpointEdit, &QLineEdit::textChanged, this, [this](const QString& endpoint) {
+        if (m_stageEndpointEdit && m_stageEndpointEdit->text() != endpoint) {
+            m_stageEndpointEdit->setText(endpoint);
+        }
+    });
+
+    connect(m_stageEndpointEdit, &QLineEdit::textEdited, this, [this](const QString& endpoint) {
+        if (m_grpcEndpointEdit && m_grpcEndpointEdit->text() != endpoint) {
+            m_grpcEndpointEdit->setText(endpoint);
+        }
+    });
+
+    if (m_stageUseStageBackendButton) {
+        connect(m_stageUseStageBackendButton, &QPushButton::clicked, this, [this]() {
+            ensureStageBackendComboEntry();
+            const int ix = m_backendTypeCombo ? m_backendTypeCombo->findData(QStringLiteral("stage")) : -1;
+            if (ix >= 0 && m_backendTypeCombo) {
+                m_backendTypeCombo->setCurrentIndex(ix);
+            }
+            saveConfigFromUI();
+            if (m_appController) {
+                m_appController->applyReceiverBackendFromConfig();
+            }
+        });
+    }
+
+    connect(m_stageApplyEndpointButton, &QPushButton::clicked, this, [this]() {
+        const QString endpoint = m_stageEndpointEdit ? m_stageEndpointEdit->text().trimmed() : QString();
+        if (endpoint.isEmpty()) {
+            QMessageBox::warning(this, QStringLiteral("提示"), QStringLiteral("三轴台 gRPC 服务地址不能为空"));
+            return;
+        }
+
+        if (m_grpcEndpointEdit) {
+            m_grpcEndpointEdit->setText(endpoint);
+        }
+
+        if (m_stageCommandResultLabel) {
+            m_stageCommandResultLabel->setText(QString("最近结果: 已应用服务地址 %1").arg(endpoint));
+            m_stageCommandResultLabel->setStyleSheet("color: #1d4ed8;");
+        }
+
+        saveConfigFromUI();
+        if (m_appController) {
+            m_appController->reloadRuntimeConfig();
+        }
+    });
+
+    connect(m_stageConnectButton, &QPushButton::clicked, this, [this]() {
+        if (!isStageBackendSelected()) {
+            ensureStageBackendComboEntry();
+            const int stageIndex = m_backendTypeCombo ? m_backendTypeCombo->findData(QStringLiteral("stage")) : -1;
+            if (stageIndex >= 0) {
+                m_backendTypeCombo->setCurrentIndex(stageIndex);
+            }
+        }
+
+        if (m_stageEndpointEdit && m_grpcEndpointEdit) {
+            const QString endpoint = m_stageEndpointEdit->text().trimmed();
+            if (!endpoint.isEmpty()) {
+                m_grpcEndpointEdit->setText(endpoint);
+            }
+        }
+
+        onConnectClicked();
+    });
+
+    connect(m_stageDisconnectButton, &QPushButton::clicked, this, &MainWindow::onDisconnectClicked);
+
+    connect(m_stageGetPositionButton, &QPushButton::clicked, this, [this]() {
+        sendStageCommandText(QStringLiteral("get_positions"));
+    });
+
+    connect(m_stageStartStreamButton, &QPushButton::clicked, this, [this]() {
+        const int intervalMs = m_stageStreamIntervalSpin ? m_stageStreamIntervalSpin->value() : 100;
+        sendStageCommandText(QStringLiteral("start_stream %1").arg(intervalMs));
+    });
+
+    connect(m_stageStopStreamButton, &QPushButton::clicked, this, [this]() {
+        sendStageCommandText(QStringLiteral("stop_stream"));
+    });
+
+    connect(m_stageJogStartButton, &QPushButton::clicked, this, [this]() {
+        const QString axis = m_stageJogAxisCombo ? m_stageJogAxisCombo->currentData().toString() : QStringLiteral("x");
+        const QString dir = m_stageJogDirectionCombo ? m_stageJogDirectionCombo->currentData().toString() : QStringLiteral("+");
+        sendStageCommandText(QStringLiteral("jog %1 %2 on").arg(axis, dir));
+    });
+
+    connect(m_stageJogStopButton, &QPushButton::clicked, this, [this]() {
+        const QString axis = m_stageJogAxisCombo ? m_stageJogAxisCombo->currentData().toString() : QStringLiteral("x");
+        const QString dir = m_stageJogDirectionCombo ? m_stageJogDirectionCombo->currentData().toString() : QStringLiteral("+");
+        sendStageCommandText(QStringLiteral("jog %1 %2 off").arg(axis, dir));
+    });
+
+    connect(m_stageMoveAbsButton, &QPushButton::clicked, this, [this]() {
+        const QString command = QStringLiteral("move_abs %1 %2 %3 %4")
+                                    .arg(m_stageMoveAbsXSpin ? m_stageMoveAbsXSpin->value() : 0.0, 0, 'f', 3)
+                                    .arg(m_stageMoveAbsYSpin ? m_stageMoveAbsYSpin->value() : 0.0, 0, 'f', 3)
+                                    .arg(m_stageMoveAbsZSpin ? m_stageMoveAbsZSpin->value() : 0.0, 0, 'f', 3)
+                                    .arg(m_stageMoveTimeoutSpin ? m_stageMoveTimeoutSpin->value() : 10000);
+        sendStageCommandText(command);
+    });
+
+    connect(m_stageMoveRelButton, &QPushButton::clicked, this, [this]() {
+        const QString axis = m_stageMoveRelAxisCombo ? m_stageMoveRelAxisCombo->currentData().toString() : QStringLiteral("x");
+        const QString command = QStringLiteral("move_rel %1 %2 %3")
+                                    .arg(axis)
+                                    .arg(m_stageMoveRelDeltaSpin ? m_stageMoveRelDeltaSpin->value() : 0.0, 0, 'f', 3)
+                                    .arg(m_stageMoveTimeoutSpin ? m_stageMoveTimeoutSpin->value() : 10000);
+        sendStageCommandText(command);
+    });
+
+    connect(m_stageSetSpeedButton, &QPushButton::clicked, this, [this]() {
+        const int speed = m_stageSpeedSpin ? m_stageSpeedSpin->value() : 20000;
+        const int accel = m_stageAccelSpin ? m_stageAccelSpin->value() : 100;
+        sendStageCommandText(QStringLiteral("set_speed %1 %2").arg(speed).arg(accel));
+    });
+
+    connect(m_stageStartScanButton, &QPushButton::clicked, this, [this]() {
+        const QString mode = m_stageScanModeCombo ? m_stageScanModeCombo->currentData().toString() : QStringLiteral("snake");
+        const QString command = QStringLiteral("start_scan %1 %2 %3 %4 %5 %6 %7")
+                                    .arg(mode)
+                                    .arg(m_stageScanXsSpin ? m_stageScanXsSpin->value() : 0.0, 0, 'f', 3)
+                                    .arg(m_stageScanXeSpin ? m_stageScanXeSpin->value() : 0.0, 0, 'f', 3)
+                                    .arg(m_stageScanYsSpin ? m_stageScanYsSpin->value() : 0.0, 0, 'f', 3)
+                                    .arg(m_stageScanYeSpin ? m_stageScanYeSpin->value() : 0.0, 0, 'f', 3)
+                                    .arg(m_stageScanStepSpin ? m_stageScanStepSpin->value() : 1.0, 0, 'f', 3)
+                                    .arg(m_stageScanZFixSpin ? m_stageScanZFixSpin->value() : 0.0, 0, 'f', 3);
+        sendStageCommandText(command);
+    });
+
+    connect(m_stageStopScanButton, &QPushButton::clicked, this, [this]() {
+        sendStageCommandText(QStringLiteral("stop_scan"));
+    });
+
+    connect(m_stageScanStatusButton, &QPushButton::clicked, this, [this]() {
+        sendStageCommandText(QStringLiteral("scan_status"));
+    });
+
+    if (m_stageCustomCommandEdit) {
+        connect(m_stageCustomCommandEdit, &QLineEdit::returnPressed, this, [this]() {
+            if (!m_stageCustomCommandEdit) {
+                return;
+            }
+            sendStageCommandText(m_stageCustomCommandEdit->text());
+        });
+    }
+    if (m_stageCustomCommandSendButton) {
+        connect(m_stageCustomCommandSendButton, &QPushButton::clicked, this, [this]() {
+            if (!m_stageCustomCommandEdit) {
+                return;
+            }
+            sendStageCommandText(m_stageCustomCommandEdit->text());
+        });
+    }
+    if (m_stageCommandHelpButton) {
+        connect(m_stageCommandHelpButton, &QPushButton::clicked, this, [this]() {
+            sendStageCommandText(QStringLiteral("help"));
+        });
+    }
     
     // 指令发送信号槽
     connect(m_sendButton, &QPushButton::clicked, this, &MainWindow::onSendClicked);
@@ -935,6 +1433,7 @@ void MainWindow::initConnections()
     }
 #endif
 
+    updateStagePanelUiState();
     updateGrpcTestUiState();
     
     // 其他信号槽将在后续连接到SerialReceiver
@@ -949,9 +1448,16 @@ void MainWindow::loadConfigToUI()
     
     // 加载串口配置
     const QString backendType = config->receiverBackendType().trimmed().toLower();
-    const int backendIndex = m_backendTypeCombo->findData(backendType.isEmpty() ? "grpc" : backendType);
+    const QString effectiveBackend = backendType.isEmpty() ? QStringLiteral("grpc") : backendType;
+    if (effectiveBackend.compare(QStringLiteral("stage"), Qt::CaseInsensitive) == 0) {
+        ensureStageBackendComboEntry();
+    }
+    const int backendIndex = m_backendTypeCombo->findData(effectiveBackend);
     m_backendTypeCombo->setCurrentIndex(backendIndex >= 0 ? backendIndex : 0);
     m_grpcEndpointEdit->setText(config->grpcEndpoint());
+    if (m_stageEndpointEdit) {
+        m_stageEndpointEdit->setText(config->grpcEndpoint());
+    }
 
     const QString configuredSerialPort = config->serialPort().trimmed();
     const int serialPortIndex = m_serialPortCombo->findData(configuredSerialPort);
@@ -1034,6 +1540,9 @@ void MainWindow::saveConfigFromUI()
     config->setShowDevicePanel(m_devicePanel->isVisible());
     config->setShowCommandPanel(m_commandPanel->isVisible());
     config->setShowPlotPanel(m_plotPanel->isVisible());
+    if (m_stagePanel) {
+        config->setShowStagePanel(m_stagePanel->isVisible());
+    }
     config->setShowMonitorPanel(m_monitorPanel->isVisible());
     
     // 保存窗口状态
@@ -1462,6 +1971,246 @@ void MainWindow::handleGrpcBackendPacket(const QJsonObject& packet)
             setGrpcLabelState(m_grpcSelfTestOverallState, QStringLiteral("收发验证失败（连接中断）"), GrpcLabelTone::Error);
         }
         updateGrpcTestUiState();
+    }
+}
+
+void MainWindow::ensureStageBackendComboEntry()
+{
+    if (!m_backendTypeCombo) {
+        return;
+    }
+    if (m_backendTypeCombo->findData(QStringLiteral("stage")) >= 0) {
+        return;
+    }
+    m_backendTypeCombo->addItem(QStringLiteral("三轴台测试装置（gRPC Stage）"), QStringLiteral("stage"));
+}
+
+bool MainWindow::isStageBackendSelected() const
+{
+    return (m_backendTypeCombo &&
+            m_backendTypeCombo->currentData().toString().compare("stage", Qt::CaseInsensitive) == 0);
+}
+
+void MainWindow::updateStagePanelUiState()
+{
+    if (!m_stagePanel) {
+        return;
+    }
+
+    const bool isStageBackend = isStageBackendSelected();
+    const bool isStageConnected = (isStageBackend && m_isConnected);
+
+    if (m_stageUseStageBackendButton) {
+        const bool alreadyStage = isStageBackendSelected();
+        m_stageUseStageBackendButton->setEnabled(!alreadyStage);
+        m_stageUseStageBackendButton->setText(
+            alreadyStage ? QStringLiteral("当前采集源：三轴台测试装置")
+                         : QStringLiteral("数据采集改为三轴台（测试装置）"));
+    }
+    if (m_stageEndpointEdit) {
+        m_stageEndpointEdit->setEnabled(true);
+    }
+    if (m_stageApplyEndpointButton) {
+        m_stageApplyEndpointButton->setEnabled(true);
+    }
+    if (m_stageConnectButton) {
+        m_stageConnectButton->setEnabled(isStageBackend && !m_isConnected);
+    }
+    if (m_stageDisconnectButton) {
+        m_stageDisconnectButton->setEnabled(isStageBackend && m_isConnected);
+    }
+
+    for (QWidget* widget : {
+             static_cast<QWidget*>(m_stageGetPositionButton),
+             static_cast<QWidget*>(m_stageStartStreamButton),
+             static_cast<QWidget*>(m_stageStopStreamButton),
+             static_cast<QWidget*>(m_stageJogAxisCombo),
+             static_cast<QWidget*>(m_stageJogDirectionCombo),
+             static_cast<QWidget*>(m_stageJogStartButton),
+             static_cast<QWidget*>(m_stageJogStopButton),
+             static_cast<QWidget*>(m_stageMoveAbsXSpin),
+             static_cast<QWidget*>(m_stageMoveAbsYSpin),
+             static_cast<QWidget*>(m_stageMoveAbsZSpin),
+             static_cast<QWidget*>(m_stageMoveTimeoutSpin),
+             static_cast<QWidget*>(m_stageMoveAbsButton),
+             static_cast<QWidget*>(m_stageMoveRelAxisCombo),
+             static_cast<QWidget*>(m_stageMoveRelDeltaSpin),
+             static_cast<QWidget*>(m_stageMoveRelButton),
+             static_cast<QWidget*>(m_stageSpeedSpin),
+             static_cast<QWidget*>(m_stageAccelSpin),
+             static_cast<QWidget*>(m_stageSetSpeedButton),
+             static_cast<QWidget*>(m_stageScanModeCombo),
+             static_cast<QWidget*>(m_stageScanXsSpin),
+             static_cast<QWidget*>(m_stageScanXeSpin),
+             static_cast<QWidget*>(m_stageScanYsSpin),
+             static_cast<QWidget*>(m_stageScanYeSpin),
+             static_cast<QWidget*>(m_stageScanStepSpin),
+             static_cast<QWidget*>(m_stageScanZFixSpin),
+             static_cast<QWidget*>(m_stageStartScanButton),
+             static_cast<QWidget*>(m_stageStopScanButton),
+             static_cast<QWidget*>(m_stageScanStatusButton),
+             static_cast<QWidget*>(m_stageCustomCommandEdit),
+             static_cast<QWidget*>(m_stageCustomCommandSendButton),
+             static_cast<QWidget*>(m_stageCommandHelpButton),
+         }) {
+        if (widget) {
+            widget->setEnabled(isStageConnected);
+        }
+    }
+
+    if (!isStageBackend) {
+        if (m_stageBackendStatusLabel) {
+            m_stageBackendStatusLabel->setText(
+                QStringLiteral("状态: 主采集源为被测设备（未切到三轴台测试装置）"));
+            m_stageBackendStatusLabel->setStyleSheet("color: gray;");
+        }
+        return;
+    }
+
+    if (m_stageBackendStatusLabel) {
+        if (!m_isConnected) {
+            m_stageBackendStatusLabel->setText(QStringLiteral("状态: 三轴台测试装置未连接"));
+            m_stageBackendStatusLabel->setStyleSheet("color: gray;");
+        } else {
+            const QString t = m_stageBackendStatusLabel->text();
+            if (t.contains(QStringLiteral("未连接")) && !t.contains(QLatin1Char('@'))) {
+                m_stageBackendStatusLabel->setText(QStringLiteral("状态: 已连接"));
+                m_stageBackendStatusLabel->setStyleSheet("color: green;");
+            }
+        }
+    }
+}
+
+void MainWindow::sendStageCommandText(const QString& command)
+{
+    const QString normalizedCommand = command.trimmed();
+    if (normalizedCommand.isEmpty()) {
+        return;
+    }
+
+    if (!m_appController) {
+        QMessageBox::warning(
+            this,
+            QStringLiteral("错误"),
+            QStringLiteral("应用控制器未初始化，无法发送三轴台指令"));
+        return;
+    }
+
+    if (!isStageBackendSelected()) {
+        QMessageBox::information(
+            this,
+            QStringLiteral("提示"),
+            QStringLiteral("请先在右侧点击「数据采集改为三轴台（测试装置）」，将主采集源切到三轴台 gRPC。"));
+        return;
+    }
+
+    if (!m_isConnected) {
+        QMessageBox::information(
+            this,
+            QStringLiteral("提示"),
+            QStringLiteral("三轴台测试装置尚未连接，请先点击「连接三轴台」或左侧「连接」。"));
+        return;
+    }
+
+    addCommandToHistory(normalizedCommand);
+    m_appController->sendCommand(normalizedCommand, false);
+
+    if (m_stageCommandResultLabel) {
+        m_stageCommandResultLabel->setText(QString("最近结果: 指令已发送 [%1]").arg(normalizedCommand));
+        m_stageCommandResultLabel->setStyleSheet("color: #1d4ed8;");
+    }
+}
+
+void MainWindow::handleStageBackendPacket(const QJsonObject& packet)
+{
+    const QString packetType = packet.value("type").toString();
+
+    if (packetType == "stageStatus") {
+        const QString status = packet.value("status").toString();
+        const QString endpoint = packet.value("endpoint").toString();
+        const QString detail = packet.value("detail").toString();
+        QString displayText = QString("状态: %1").arg(status.isEmpty() ? QStringLiteral("unknown") : status);
+        if (!endpoint.isEmpty()) {
+            displayText += QString(" @ %1").arg(endpoint);
+        }
+        if (!detail.isEmpty()) {
+            displayText += QString(" | %1").arg(detail);
+        }
+
+        QString color = "gray";
+        if (status == "connected" || status == "reconnected") {
+            color = "green";
+        } else if (status == "reconnecting") {
+            color = "#d97706";
+        } else if (status == "streamClosed" ||
+                   status.contains("fail", Qt::CaseInsensitive) ||
+                   status.contains("reject", Qt::CaseInsensitive)) {
+            color = "red";
+        }
+
+        if (m_stageBackendStatusLabel) {
+            m_stageBackendStatusLabel->setText(displayText);
+            m_stageBackendStatusLabel->setStyleSheet(QString("color: %1;").arg(color));
+        }
+
+        updateStagePanelUiState();
+        return;
+    }
+
+    if (packetType == "stagePositions") {
+        const double xMm = packet.value("xMm").toDouble(0.0);
+        const double yMm = packet.value("yMm").toDouble(0.0);
+        const double zMm = packet.value("zMm").toDouble(0.0);
+        const int xPulse = packet.value("xPulse").toInt(0);
+        const int yPulse = packet.value("yPulse").toInt(0);
+        const int zPulse = packet.value("zPulse").toInt(0);
+        const QString source = packet.value("source").toString();
+        const qint64 unixMs = packet.value("unixMs").toVariant().toLongLong();
+
+        if (m_stagePositionLabel) {
+            QString suffix;
+            if (!source.isEmpty() || unixMs > 0) {
+                suffix = QStringLiteral(" | src=%1 | t=%2")
+                             .arg(source.isEmpty() ? QStringLiteral("-") : source)
+                             .arg(unixMs > 0 ? QString::number(unixMs) : QStringLiteral("-"));
+            }
+            m_stagePositionLabel->setText(
+                QString("X: %1 mm (%2 pulse) | Y: %3 mm (%4 pulse) | Z: %5 mm (%6 pulse)%7")
+                    .arg(xMm, 0, 'f', 3)
+                    .arg(xPulse)
+                    .arg(yMm, 0, 'f', 3)
+                    .arg(yPulse)
+                    .arg(zMm, 0, 'f', 3)
+                    .arg(zPulse)
+                    .arg(suffix));
+        }
+        return;
+    }
+
+    if (packetType == "stageCommandResult") {
+        const bool ok = packet.value("ok").toBool(false);
+        const QString command = packet.value("command").toString();
+        const QString message = packet.value("message").toString();
+
+        if (m_stageCommandResultLabel) {
+            m_stageCommandResultLabel->setText(
+                QString("最近结果: [%1] %2")
+                    .arg(command, message.isEmpty() ? QStringLiteral("(无消息)") : message));
+            m_stageCommandResultLabel->setStyleSheet(ok ? "color: green;" : "color: red;");
+        }
+        return;
+    }
+
+    if (packetType == "stageScanStatus") {
+        const bool running = packet.value("running").toBool(false);
+        const QString statusText = packet.value("status").toString();
+        if (m_stageScanStatusLabel) {
+            m_stageScanStatusLabel->setText(
+                QString("扫描状态: %1 | %2")
+                    .arg(running ? QStringLiteral("运行中") : QStringLiteral("已停止"),
+                         statusText.isEmpty() ? QStringLiteral("-") : statusText));
+            m_stageScanStatusLabel->setStyleSheet(running ? "color: #d97706;" : "color: gray;");
+        }
     }
 }
 
@@ -1911,26 +2660,62 @@ void MainWindow::onBackendTypeChanged(int index)
     Q_UNUSED(index)
     const QString backendType = m_backendTypeCombo->currentData().toString();
     const bool isGrpc = (backendType.compare("grpc", Qt::CaseInsensitive) == 0);
+    const bool isStage = (backendType.compare("stage", Qt::CaseInsensitive) == 0);
+    const bool isGrpcLike = (isGrpc || isStage);
 
-    m_useMockDataCheck->setText(isGrpc ? "启用 gRPC 本地模拟" : "启用模拟数据");
+    if (isStage) {
+        if (m_hexFormatCheck && m_hexFormatCheck->isEnabled()) {
+            m_hexFormatCheckedBeforeStage = m_hexFormatCheck->isChecked();
+            m_hexFormatSuspendedForStage = true;
+            m_hexFormatCheck->setChecked(false);
+            m_hexFormatCheck->setEnabled(false);
+        }
+    } else if (m_hexFormatSuspendedForStage && m_hexFormatCheck) {
+        m_hexFormatCheck->setEnabled(true);
+        m_hexFormatCheck->setChecked(m_hexFormatCheckedBeforeStage);
+        m_hexFormatSuspendedForStage = false;
+    }
 
-    m_grpcEndpointEdit->setEnabled(isGrpc);
+    if (isGrpc) {
+        m_useMockDataCheck->setText(QStringLiteral("被测设备 gRPC 本地模拟"));
+    } else if (isStage) {
+        m_useMockDataCheck->setText(QStringLiteral("三轴台测试装置本地模拟"));
+    } else {
+        m_useMockDataCheck->setText(QStringLiteral("启用模拟数据"));
+    }
+
+    m_grpcEndpointEdit->setEnabled(isGrpcLike);
 
     for (QWidget* field : m_serialOnlyFields) {
         if (!field) {
             continue;
         }
-        field->setVisible(!isGrpc);
-        field->setEnabled(!isGrpc);
+        field->setVisible(!isGrpcLike);
+        field->setEnabled(!isGrpcLike);
     }
     for (QWidget* label : m_serialOnlyLabels) {
         if (!label) {
             continue;
         }
-        label->setVisible(!isGrpc);
+        label->setVisible(!isGrpcLike);
     }
 
-    if (!isGrpc) {
+    if (isStage && m_stagePanel && m_stagePanel->isVisible()) {
+        m_stagePanel->raise();
+    }
+
+    if (m_grpcTestGroup) {
+        m_grpcTestGroup->setVisible(!isStage);
+    }
+
+    if (isStage && m_stageEndpointEdit && m_grpcEndpointEdit) {
+        const QString endpoint = m_grpcEndpointEdit->text().trimmed();
+        if (!endpoint.isEmpty() && m_stageEndpointEdit->text() != endpoint) {
+            m_stageEndpointEdit->setText(endpoint);
+        }
+    }
+
+    if (!isGrpcLike) {
         updateSerialPortList();
     }
 
@@ -1949,6 +2734,12 @@ void MainWindow::onBackendTypeChanged(int index)
     setGrpcLabelState(m_grpcModeSwitchState, QStringLiteral("待验证"), GrpcLabelTone::Neutral);
     setGrpcLabelState(m_grpcPeriodicDataState, QStringLiteral("待验证"), GrpcLabelTone::Neutral);
 
+    saveConfigFromUI();
+    if (m_appController) {
+        m_appController->applyReceiverBackendFromConfig();
+    }
+
+    updateStagePanelUiState();
     updateGrpcTestUiState();
 }
 
@@ -2115,12 +2906,21 @@ void MainWindow::onSendClicked()
         QMessageBox::warning(this, "警告", "指令不能为空");
         return;
     }
+
+    const bool isStageBackend =
+        (m_backendTypeCombo &&
+         m_backendTypeCombo->currentData().toString().compare("stage", Qt::CaseInsensitive) == 0);
+    const bool isHex = m_hexFormatCheck->isChecked();
+    if (isStageBackend && isHex) {
+        QMessageBox::warning(
+            this,
+            QStringLiteral("提示"),
+            QStringLiteral("三轴台测试装置仅支持文本指令。请关闭「HEX发送」，或使用右侧「自定义指令」。"));
+        return;
+    }
     
     // 添加到历史记录
     addCommandToHistory(command);
-    
-    // 获取发送格式
-    bool isHex = m_hexFormatCheck->isChecked();
     
     // 获取换行符
     QString newline = "";
@@ -2283,15 +3083,31 @@ void MainWindow::onShowMonitorPanelChanged(bool show)
     m_monitorPanel->setVisible(show);
 }
 
+void MainWindow::onShowStagePanelChanged(bool show)
+{
+    if (m_stagePanel) {
+        m_stagePanel->setVisible(show);
+    }
+}
+
 void MainWindow::onDataReceived(const QByteArray& data, bool isHex)
 {
     const bool isGrpcBackend = (m_backendTypeCombo &&
                                 m_backendTypeCombo->currentData().toString().compare("grpc", Qt::CaseInsensitive) == 0);
-    if (isGrpcBackend) {
+    const bool isStageBackend = (m_backendTypeCombo &&
+                                 m_backendTypeCombo->currentData().toString().compare("stage", Qt::CaseInsensitive) == 0);
+
+    if (isGrpcBackend || isStageBackend) {
         QJsonParseError parseError;
         const QJsonDocument jsonDoc = QJsonDocument::fromJson(data, &parseError);
         if (parseError.error == QJsonParseError::NoError && jsonDoc.isObject()) {
-            handleGrpcBackendPacket(jsonDoc.object());
+            const QJsonObject packet = jsonDoc.object();
+            if (isGrpcBackend) {
+                handleGrpcBackendPacket(packet);
+            }
+            if (isStageBackend) {
+                handleStageBackendPacket(packet);
+            }
         }
     }
 
@@ -2324,9 +3140,14 @@ void MainWindow::onCommandSent(const QByteArray& command)
 
     const bool isGrpcBackend = (m_backendTypeCombo &&
                                 m_backendTypeCombo->currentData().toString().compare("grpc", Qt::CaseInsensitive) == 0);
+    const bool isStageBackend = (m_backendTypeCombo &&
+                                 m_backendTypeCombo->currentData().toString().compare("stage", Qt::CaseInsensitive) == 0);
     if (isGrpcBackend) {
         logGrpcInteraction("send", QString("命令已发送: %1")
                                      .arg(QString::fromUtf8(command).trimmed()));
+    } else if (isStageBackend && m_stageCommandResultLabel) {
+        m_stageCommandResultLabel->setText(QString("最近结果: 已发送 %1").arg(QString::fromUtf8(command).trimmed()));
+        m_stageCommandResultLabel->setStyleSheet("color: #1d4ed8;");
     }
 }
 
@@ -2356,8 +3177,19 @@ void MainWindow::onCommandError(const QString& error)
 
     const bool isGrpcBackend = (m_backendTypeCombo &&
                                 m_backendTypeCombo->currentData().toString().compare("grpc", Qt::CaseInsensitive) == 0);
+    const bool isStageBackend = (m_backendTypeCombo &&
+                                 m_backendTypeCombo->currentData().toString().compare("stage", Qt::CaseInsensitive) == 0);
     if (isGrpcBackend) {
         logGrpcInteraction("error", error);
+    } else if (isStageBackend) {
+        if (m_stageCommandResultLabel) {
+            m_stageCommandResultLabel->setText(QString("最近结果: 命令失败 - %1").arg(error));
+            m_stageCommandResultLabel->setStyleSheet("color: red;");
+        }
+        if (m_stageBackendStatusLabel) {
+            m_stageBackendStatusLabel->setText(QString("状态: 异常 | %1").arg(error));
+            m_stageBackendStatusLabel->setStyleSheet("color: red;");
+        }
     }
 
     QString timestamp = QDateTime::currentDateTime().toString("hh:mm:ss.zzz");

@@ -206,6 +206,10 @@ if "%CLEAN_BUILD%"=="1" (
     if exist proto\generated\device_data.pb.cc    del /q proto\generated\device_data.pb.cc
     if exist proto\generated\device_data.grpc.pb.h  del /q proto\generated\device_data.grpc.pb.h
     if exist proto\generated\device_data.grpc.pb.cc del /q proto\generated\device_data.grpc.pb.cc
+    if exist proto\generated\stage.pb.h     del /q proto\generated\stage.pb.h
+    if exist proto\generated\stage.pb.cc    del /q proto\generated\stage.pb.cc
+    if exist proto\generated\stage.grpc.pb.h  del /q proto\generated\stage.grpc.pb.h
+    if exist proto\generated\stage.grpc.pb.cc del /q proto\generated\stage.grpc.pb.cc
 )
 
 REM ============================================================
@@ -216,6 +220,7 @@ if "%ENABLE_GRPC%"=="1" (
     set "PROTO_DIR=%CD%\proto"
     set "PROTO_OUT=%CD%\proto\generated"
     set "PROTO_FILE=%CD%\proto\device_data.proto"
+    set "PROTO_FILE_STAGE=%CD%\proto\stage.proto"
 )
 REM 延迟展开：检查 PROTO_FILE 是否存在（变量在 if 块内赋值，需用 !VAR! 读取）
 if "%ENABLE_GRPC%"=="1" (
@@ -270,6 +275,16 @@ if "%ENABLE_GRPC%"=="1" (
 
     "!PROTOC_EXE!" --proto_path="!PROTO_DIR!" --grpc_out="!PROTO_OUT!" --plugin=protoc-gen-grpc="!GRPC_PLUGIN!" "!PROTO_FILE!"
     if errorlevel 1 ( echo [ERROR] protoc --grpc_out 失败 & exit /b 1 )
+
+    if exist "!PROTO_FILE_STAGE!" (
+        "!PROTOC_EXE!" --proto_path="!PROTO_DIR!" --cpp_out="!PROTO_OUT!" "!PROTO_FILE_STAGE!"
+        if errorlevel 1 ( echo [ERROR] stage.proto protoc --cpp_out 失败 & exit /b 1 )
+
+        "!PROTOC_EXE!" --proto_path="!PROTO_DIR!" --grpc_out="!PROTO_OUT!" --plugin=protoc-gen-grpc="!GRPC_PLUGIN!" "!PROTO_FILE_STAGE!"
+        if errorlevel 1 ( echo [ERROR] stage.proto protoc --grpc_out 失败 & exit /b 1 )
+    ) else (
+        echo [WARN] 未找到 stage.proto，跳过 Stage gRPC 代码生成
+    )
 )
 :after_protoc
 
