@@ -402,6 +402,12 @@ if(WIN32 AND NOT ENABLE_WASM)
     endif()
 endif()
 
+include(CTest)
+option(BUILD_TESTS "Build stage automation tests (Qt Test + gRPC)" ON)
+if(BUILD_TESTS AND ENABLE_GRPC AND NOT ENABLE_WASM)
+  add_subdirectory(tests)
+endif()
+
 # 打印配置摘要
 message(STATUS "==========================================")
 message(STATUS "DeviceReceiver CMake 配置")

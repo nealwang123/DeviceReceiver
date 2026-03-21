@@ -325,6 +325,9 @@ if "%ENABLE_WASM%"=="1" (
     set "CMAKE_OPTIONS=!CMAKE_OPTIONS! -DENABLE_WASM=OFF"
 )
 
+REM 三轴台 / Stage 自动化测试（tst_stage_integration、tst_stage_panel），需 gRPC 且非 WASM
+set "CMAKE_OPTIONS=!CMAKE_OPTIONS! -DBUILD_TESTS=ON"
+
 if defined VCPKG_ROOT (
     set "CMAKE_OPTIONS=!CMAKE_OPTIONS! -DVCPKG_ROOT="!VCPKG_ROOT!""
 )
@@ -411,6 +414,30 @@ if errorlevel 1 (
     exit /b 1
 )
 
+REM --- 构建 Stage 自动化测试目标（如果启用 gRPC 且非 WASM）---
+if /I "%ENABLE_GRPC%"=="1" (
+    if /I "%ENABLE_WASM%"=="0" (
+        echo [INFO] 构建 Stage 自动化测试目标...
+        cmake --build . --target tst_stage_integration > stage_tests_build_integration.log 2>&1
+        if errorlevel 1 (
+            echo [ERROR] 构建 tst_stage_integration 失败
+            type stage_tests_build_integration.log | findstr /I /C:"error" /C:"fatal" /C:"LNK"
+            echo [INFO] 完整日志: %BUILD_DIR%\stage_tests_build_integration.log
+            cd ..
+            exit /b 1
+        )
+
+        cmake --build . --target tst_stage_panel > stage_tests_build_panel.log 2>&1
+        if errorlevel 1 (
+            echo [ERROR] 构建 tst_stage_panel 失败
+            type stage_tests_build_panel.log | findstr /I /C:"error" /C:"fatal" /C:"LNK"
+            echo [INFO] 完整日志: %BUILD_DIR%\stage_tests_build_panel.log
+            cd ..
+            exit /b 1
+        )
+    )
+)
+
 REM --- 确定可执行文件路径 ---
 if /I "%BUILD_TYPE%"=="Release" (
     set "EXE_PATH=build\release\realtime_data.exe"
@@ -463,6 +490,21 @@ if "%ENABLE_WASM%"=="0" (
             "!WINDEPLOYQT!" --release --compiler-runtime "!EXE_FULL_PATH!" >nul 2>&1
         ) else (
             "!WINDEPLOYQT!" --debug --compiler-runtime "!EXE_FULL_PATH!" >nul 2>&1
+        )
+        REM 测试可执行文件同样需要 platforms 等插件（否则双击 tst_stage_*.exe 报无法初始化平台插件）
+        if exist "!EXE_DIR!tst_stage_integration.exe" (
+            if /I "%BUILD_TYPE%"=="Release" (
+                "!WINDEPLOYQT!" --release --compiler-runtime "!EXE_DIR!tst_stage_integration.exe" >nul 2>&1
+            ) else (
+                "!WINDEPLOYQT!" --debug --compiler-runtime "!EXE_DIR!tst_stage_integration.exe" >nul 2>&1
+            )
+        )
+        if exist "!EXE_DIR!tst_stage_panel.exe" (
+            if /I "%BUILD_TYPE%"=="Release" (
+                "!WINDEPLOYQT!" --release --compiler-runtime "!EXE_DIR!tst_stage_panel.exe" >nul 2>&1
+            ) else (
+                "!WINDEPLOYQT!" --debug --compiler-runtime "!EXE_DIR!tst_stage_panel.exe" >nul 2>&1
+            )
         )
     )
     

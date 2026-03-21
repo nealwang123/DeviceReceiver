@@ -178,6 +178,16 @@ package_grpc_test_server.bat
 | `run_stage_grpc_test_server.bat` | 快速启动上述脚本 |
 | `package_stage_grpc_test_server.bat` | 打包为 `build/release/stage_grpc_test_server.exe` |
 
+**启动方式（二选一）：**
+```cmd
+run_stage_grpc_test_server.bat
+```
+```cmd
+python stage_grpc_test_server.py
+```
+
+> **勿用** `python run_stage_grpc_test_server.bat`：`.bat` 是批处理，不是 Python；若用解释器去执行会在 `echo` 等行报 `SyntaxError`（例如 `invalid character`）。自动化测试里是用 `python stage_grpc_test_server.py` 或子进程启动该脚本，而不是对 `.bat` 调 Python。
+
 控制端 gRPC 地址需与监听端口一致，例如 `127.0.0.1:50052`。
 
 **重新生成 Python 桩**（修改 `stage.proto` 后）:

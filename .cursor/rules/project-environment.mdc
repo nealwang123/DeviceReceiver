@@ -1,0 +1,19 @@
+---
+description: DeviceReceiver 构建方式与终端环境（PowerShell）
+alwaysApply: true
+---
+
+# 构建与终端
+
+## 构建
+
+- 项目根目录：`DeviceReceiver`（含 `CMakeLists.txt`、`realtime_data.pro`）。
+- **推荐 / 当前用法**：在仓库根目录执行 **`build_cmake.bat`** 进行 CMake Release 构建（全功能时依赖 vcpkg 的 gRPC/HDF5 等，脚本会处理配置与部署 Qt/HDF5/gRPC DLL）。
+- 需要全路径时示例：`d:\WS\qtpro\DeviceReceiver\build_cmake.bat`。
+- 在 **PowerShell** 中请用 **`cmd /c`** 调用批处理，避免 `cd /d` 等 cmd 语法直接在 PowerShell 里失败，例如：
+  - `cmd /c "cd /d d:\WS\qtpro\DeviceReceiver && build_cmake.bat"`
+
+## 终端环境
+
+- 默认终端为 **Windows PowerShell**（非 cmd）。
+- 长路径、含空格路径用引号包裹；跨盘符切换目录在 PowerShell 中用 `Set-Location` 或 `cmd /c` 包一层。

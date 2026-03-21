@@ -18,6 +18,7 @@
 #include <QToolBar>
 #include <QVBoxLayout>
 #include <QHBoxLayout>
+#include <QGridLayout>
 #include <QGroupBox>
 #include <QFormLayout>
 #include <QScrollBar>
@@ -85,6 +86,7 @@ MainWindow::MainWindow(ApplicationController* controller, QWidget* parent)
     , m_grpcTestServerStopRequested(false)
 #endif
 {
+    setObjectName(QStringLiteral("mainWindow"));
     try {
         qDebug() << "[MainWindow] 构造函数开始";
         
@@ -616,28 +618,16 @@ void MainWindow::initUI()
 
         // 2. 三轴台测试装置（工装，gRPC StageService）— 非被测设备
         m_stagePanel = new QDockWidget(QStringLiteral("三轴台测试装置"), this);
+        m_stagePanel->setObjectName(QStringLiteral("stage_panelDock"));
         m_stagePanel->setAllowedAreas(Qt::RightDockWidgetArea);
+        m_stagePanel->setMinimumWidth(300);
 
         QWidget* stageWidget = new QWidget();
-        stageWidget->setMinimumWidth(0);
+        stageWidget->setMinimumWidth(280);
         stageWidget->setSizePolicy(QSizePolicy::Preferred, QSizePolicy::Preferred);
         QVBoxLayout* stageLayout = new QVBoxLayout(stageWidget);
-        stageLayout->setContentsMargins(4, 2, 4, 4);
-        stageLayout->setSpacing(2);
-
-        auto addStageHeading = [stageLayout](const QString& title, const QString& tip = QString()) {
-            QLabel* h = new QLabel(title);
-            QFont f = h->font();
-            f.setBold(true);
-            h->setFont(f);
-            h->setContentsMargins(0, 4, 0, 0);
-            h->setWordWrap(true);
-            h->setSizePolicy(QSizePolicy::Preferred, QSizePolicy::Preferred);
-            if (!tip.isEmpty()) {
-                h->setToolTip(tip);
-            }
-            stageLayout->addWidget(h);
-        };
+        stageLayout->setContentsMargins(4, 4, 4, 6);
+        stageLayout->setSpacing(8);
 
         auto createStageDoubleSpin = [](double minValue,
                                         double maxValue,
@@ -652,227 +642,377 @@ void MainWindow::initUI()
             return spin;
         };
 
-        addStageHeading(QStringLiteral("gRPC 连接"),
-                        QStringLiteral("三轴台工装 gRPC 地址 host:port；若与台下位机 TCP 不同，使用 host:port|stageIp:stagePort"));
+        // —— 连接与地址 ——
+        QGroupBox* stageGrpcGroup = new QGroupBox(QStringLiteral("连接与工装地址"));
+        stageGrpcGroup->setObjectName(QStringLiteral("stage_group_grpc"));
+        stageGrpcGroup->setToolTip(QStringLiteral(
+            "三轴台工装 gRPC 地址 host:port；若与台下位机 TCP 不同，使用 host:port|stageIp:stagePort"));
+        QVBoxLayout* grpcVBox = new QVBoxLayout(stageGrpcGroup);
+        grpcVBox->setContentsMargins(8, 8, 8, 8);
+        grpcVBox->setSpacing(6);
         QHBoxLayout* stageEndpointLayout = new QHBoxLayout();
-        stageEndpointLayout->setSpacing(4);
-        stageEndpointLayout->addWidget(new QLabel(QStringLiteral("地址:")));
+        stageEndpointLayout->setSpacing(6);
+        QLabel* stageAddrLbl = new QLabel(QStringLiteral("gRPC 地址"));
+        stageAddrLbl->setMinimumWidth(56);
         m_stageEndpointEdit = new QLineEdit();
-        m_stageEndpointEdit->setPlaceholderText(QStringLiteral("host:port 或 host:port|ip:port"));
+        m_stageEndpointEdit->setObjectName(QStringLiteral("stage_endpointEdit"));
+        m_stageEndpointEdit->setPlaceholderText(QStringLiteral("例: 127.0.0.1:50052 或 host:port|ip:port"));
         m_stageEndpointEdit->setToolTip(
             QStringLiteral("与左侧「被测设备 gRPC」共用同一配置项保存；两路地址若不同需后续版本拆分为独立配置键。"));
         m_stageApplyEndpointButton = new QPushButton(QStringLiteral("应用"));
+        m_stageApplyEndpointButton->setObjectName(QStringLiteral("stage_applyEndpointButton"));
+        m_stageApplyEndpointButton->setToolTip(QStringLiteral("将地址写入配置（下次启动仍有效）"));
+        stageEndpointLayout->addWidget(stageAddrLbl);
         stageEndpointLayout->addWidget(m_stageEndpointEdit, 1);
         stageEndpointLayout->addWidget(m_stageApplyEndpointButton);
-
         QHBoxLayout* stageConnectRowLayout = new QHBoxLayout();
-        stageConnectRowLayout->setSpacing(4);
+        stageConnectRowLayout->setSpacing(6);
         m_stageConnectButton = new QPushButton(QStringLiteral("连接"));
+        m_stageConnectButton->setObjectName(QStringLiteral("stage_connectButton"));
         m_stageDisconnectButton = new QPushButton(QStringLiteral("断开"));
+        m_stageDisconnectButton->setObjectName(QStringLiteral("stage_disconnectButton"));
         stageConnectRowLayout->addWidget(m_stageConnectButton);
         stageConnectRowLayout->addWidget(m_stageDisconnectButton);
         stageConnectRowLayout->addStretch();
-
         m_stageBackendStatusLabel = new QLabel(QStringLiteral("状态: 未连接"));
+        m_stageBackendStatusLabel->setObjectName(QStringLiteral("stage_backendStatusLabel"));
         m_stageBackendStatusLabel->setStyleSheet(QStringLiteral("color: gray;"));
         m_stageBackendStatusLabel->setWordWrap(true);
+        grpcVBox->addLayout(stageEndpointLayout);
+        grpcVBox->addLayout(stageConnectRowLayout);
+        grpcVBox->addWidget(m_stageBackendStatusLabel);
+        stageLayout->addWidget(stageGrpcGroup);
 
-        stageLayout->addLayout(stageEndpointLayout);
-        stageLayout->addLayout(stageConnectRowLayout);
-        stageLayout->addWidget(m_stageBackendStatusLabel);
-
-        addStageHeading(QStringLiteral("位置与流"),
-                        QStringLiteral("读取一次、或按间隔订阅 PositionStream；JSON 实时包带 source/unixMs"));
+        // —— 位置反馈（突出显示）——
+        QGroupBox* stagePosGroup = new QGroupBox(QStringLiteral("位置反馈"));
+        stagePosGroup->setObjectName(QStringLiteral("stage_group_position"));
+        stagePosGroup->setToolTip(QStringLiteral(
+            "GetPositions 单次读取；PositionStream 按下方间隔持续推送（JSON 带 source/unixMs）"));
+        QVBoxLayout* posVBox = new QVBoxLayout(stagePosGroup);
+        posVBox->setContentsMargins(8, 8, 8, 8);
+        posVBox->setSpacing(6);
+        QFrame* posFrame = new QFrame();
+        posFrame->setObjectName(QStringLiteral("stage_positionFrame"));
+        posFrame->setFrameStyle(QFrame::StyledPanel | QFrame::Plain);
+        posFrame->setStyleSheet(QStringLiteral(
+            "QFrame#stage_positionFrame { background: palette(base); border: 1px solid palette(mid); "
+            "border-radius: 4px; padding: 4px; }"));
+        QVBoxLayout* posFrameLay = new QVBoxLayout(posFrame);
+        posFrameLay->setContentsMargins(6, 6, 6, 6);
+        QLabel* posCaption = new QLabel(QStringLiteral("当前位置 (mm / pulse 由下位机返回)"));
+        QFont capFont = posCaption->font();
+        capFont.setPointSizeF(capFont.pointSizeF() * 0.95);
+        capFont.setBold(false);
+        posCaption->setFont(capFont);
+        posCaption->setStyleSheet(QStringLiteral("color: palette(mid);"));
+        m_stagePositionLabel = new QLabel(QStringLiteral("X: —   Y: —   Z: —"));
+        m_stagePositionLabel->setObjectName(QStringLiteral("stage_positionLabel"));
+        m_stagePositionLabel->setWordWrap(true);
+        m_stagePositionLabel->setTextInteractionFlags(Qt::TextSelectableByMouse);
+        QFont mono = m_stagePositionLabel->font();
+        mono.setFamily(QStringLiteral("Consolas"));
+        if (!mono.exactMatch()) {
+            mono.setStyleHint(QFont::Monospace);
+        }
+        mono.setPointSizeF(mono.pointSizeF() + 1.0);
+        m_stagePositionLabel->setFont(mono);
+        posFrameLay->addWidget(posCaption);
+        posFrameLay->addWidget(m_stagePositionLabel);
+        posVBox->addWidget(posFrame);
         QHBoxLayout* stageStreamLayout = new QHBoxLayout();
-        stageStreamLayout->setSpacing(4);
-        stageStreamLayout->addWidget(new QLabel(QStringLiteral("流间隔:")));
+        stageStreamLayout->setSpacing(6);
+        QLabel* intervalLbl = new QLabel(QStringLiteral("推流间隔"));
+        intervalLbl->setToolTip(QStringLiteral("PositionStream 推送周期"));
         m_stageStreamIntervalSpin = new QSpinBox();
+        m_stageStreamIntervalSpin->setObjectName(QStringLiteral("stage_streamIntervalSpin"));
         m_stageStreamIntervalSpin->setRange(10, 5000);
         m_stageStreamIntervalSpin->setValue(100);
         m_stageStreamIntervalSpin->setSuffix(QStringLiteral(" ms"));
-        m_stageStreamIntervalSpin->setMaximumWidth(90);
+        m_stageStreamIntervalSpin->setMinimumWidth(88);
+        stageStreamLayout->addWidget(intervalLbl);
         stageStreamLayout->addWidget(m_stageStreamIntervalSpin);
         stageStreamLayout->addStretch();
-
         QHBoxLayout* stagePositionButtonsLayout = new QHBoxLayout();
-        stagePositionButtonsLayout->setSpacing(4);
-        m_stageGetPositionButton = new QPushButton(QStringLiteral("读位置"));
-        m_stageStartStreamButton = new QPushButton(QStringLiteral("开流"));
-        m_stageStopStreamButton = new QPushButton(QStringLiteral("停流"));
+        stagePositionButtonsLayout->setSpacing(6);
+        m_stageGetPositionButton = new QPushButton(QStringLiteral("读一次"));
+        m_stageGetPositionButton->setObjectName(QStringLiteral("stage_getPositionButton"));
+        m_stageGetPositionButton->setToolTip(QStringLiteral("GetPositions"));
+        m_stageStartStreamButton = new QPushButton(QStringLiteral("订阅位置流"));
+        m_stageStartStreamButton->setObjectName(QStringLiteral("stage_startStreamButton"));
+        m_stageStartStreamButton->setToolTip(QStringLiteral("PositionStream"));
+        m_stageStopStreamButton = new QPushButton(QStringLiteral("停止推流"));
+        m_stageStopStreamButton->setObjectName(QStringLiteral("stage_stopStreamButton"));
         stagePositionButtonsLayout->addWidget(m_stageGetPositionButton);
         stagePositionButtonsLayout->addWidget(m_stageStartStreamButton);
         stagePositionButtonsLayout->addWidget(m_stageStopStreamButton);
         stagePositionButtonsLayout->addStretch();
+        posVBox->addLayout(stageStreamLayout);
+        posVBox->addLayout(stagePositionButtonsLayout);
+        stageLayout->addWidget(stagePosGroup);
 
-        m_stagePositionLabel = new QLabel(QStringLiteral("X: -- | Y: -- | Z: --"));
-        m_stagePositionLabel->setWordWrap(true);
-
-        stageLayout->addLayout(stageStreamLayout);
-        stageLayout->addLayout(stagePositionButtonsLayout);
-        stageLayout->addWidget(m_stagePositionLabel);
-
-        addStageHeading(QStringLiteral("运动"),
-                        QStringLiteral("Jog / MoveAbs / MoveRel 对应 StageService RPC"));
-        QHBoxLayout* stageJogLayout = new QHBoxLayout();
-        stageJogLayout->setSpacing(4);
-        stageJogLayout->addWidget(new QLabel(QStringLiteral("Jog")));
+        // —— 点动 ——
+        QGroupBox* stageJogGroup = new QGroupBox(QStringLiteral("点动 (Jog)"));
+        stageJogGroup->setObjectName(QStringLiteral("stage_group_jog"));
+        stageJogGroup->setToolTip(QStringLiteral("JogStart / JogStop，连续运动"));
+        QVBoxLayout* jogVBox = new QVBoxLayout(stageJogGroup);
+        jogVBox->setContentsMargins(8, 8, 8, 8);
+        jogVBox->setSpacing(6);
+        QHBoxLayout* jogPickRow = new QHBoxLayout();
+        jogPickRow->setSpacing(6);
+        jogPickRow->addWidget(new QLabel(QStringLiteral("轴")));
         m_stageJogAxisCombo = new QComboBox();
+        m_stageJogAxisCombo->setObjectName(QStringLiteral("stage_jogAxisCombo"));
         m_stageJogAxisCombo->addItem(QStringLiteral("X"), QStringLiteral("x"));
         m_stageJogAxisCombo->addItem(QStringLiteral("Y"), QStringLiteral("y"));
         m_stageJogAxisCombo->addItem(QStringLiteral("Z"), QStringLiteral("z"));
-        m_stageJogAxisCombo->setMaximumWidth(48);
+        m_stageJogAxisCombo->setMinimumWidth(56);
+        jogPickRow->addWidget(m_stageJogAxisCombo);
+        jogPickRow->addWidget(new QLabel(QStringLiteral("方向")));
         m_stageJogDirectionCombo = new QComboBox();
-        m_stageJogDirectionCombo->addItem(QStringLiteral("+"), QStringLiteral("+"));
-        m_stageJogDirectionCombo->addItem(QStringLiteral("-"), QStringLiteral("-"));
-        m_stageJogDirectionCombo->setMaximumWidth(44);
-        m_stageJogStartButton = new QPushButton(QStringLiteral("始"));
-        m_stageJogStopButton = new QPushButton(QStringLiteral("止"));
-        m_stageJogStartButton->setMaximumWidth(40);
-        m_stageJogStopButton->setMaximumWidth(40);
-        stageJogLayout->addWidget(m_stageJogAxisCombo);
-        stageJogLayout->addWidget(m_stageJogDirectionCombo);
-        stageJogLayout->addWidget(m_stageJogStartButton);
-        stageJogLayout->addWidget(m_stageJogStopButton);
-        stageJogLayout->addStretch();
+        m_stageJogDirectionCombo->setObjectName(QStringLiteral("stage_jogDirectionCombo"));
+        m_stageJogDirectionCombo->addItem(QStringLiteral("正向 +"), QStringLiteral("+"));
+        m_stageJogDirectionCombo->addItem(QStringLiteral("负向 -"), QStringLiteral("-"));
+        m_stageJogDirectionCombo->setMinimumWidth(72);
+        jogPickRow->addWidget(m_stageJogDirectionCombo);
+        jogPickRow->addStretch();
+        jogVBox->addLayout(jogPickRow);
+        QHBoxLayout* jogBtnRow = new QHBoxLayout();
+        jogBtnRow->setSpacing(6);
+        m_stageJogStartButton = new QPushButton(QStringLiteral("开始点动"));
+        m_stageJogStartButton->setObjectName(QStringLiteral("stage_jogStartButton"));
+        m_stageJogStartButton->setToolTip(QStringLiteral("JogStart"));
+        m_stageJogStopButton = new QPushButton(QStringLiteral("停止"));
+        m_stageJogStopButton->setObjectName(QStringLiteral("stage_jogStopButton"));
+        m_stageJogStopButton->setToolTip(QStringLiteral("JogStop"));
+        jogBtnRow->addWidget(m_stageJogStartButton);
+        jogBtnRow->addWidget(m_stageJogStopButton);
+        jogBtnRow->addStretch();
+        jogVBox->addLayout(jogBtnRow);
+        stageLayout->addWidget(stageJogGroup);
 
+        // —— 绝对 / 相对运动 ——
+        QGroupBox* stageMoveGroup = new QGroupBox(QStringLiteral("目标运动 (MoveAbs / MoveRel)"));
+        stageMoveGroup->setObjectName(QStringLiteral("stage_group_move"));
+        stageMoveGroup->setToolTip(QStringLiteral("绝对坐标与相对位移，单位 mm"));
+        QVBoxLayout* moveVBox = new QVBoxLayout(stageMoveGroup);
+        moveVBox->setContentsMargins(8, 8, 8, 8);
+        moveVBox->setSpacing(8);
+        QLabel* absCap = new QLabel(QStringLiteral("绝对坐标 (mm)"));
+        absCap->setStyleSheet(QStringLiteral("font-weight: bold;"));
+        moveVBox->addWidget(absCap);
         QGridLayout* stageAbsLayout = new QGridLayout();
-        stageAbsLayout->setHorizontalSpacing(4);
-        stageAbsLayout->setVerticalSpacing(2);
-        stageAbsLayout->addWidget(new QLabel(QStringLiteral("Abs")), 0, 0);
-        stageAbsLayout->addWidget(new QLabel(QStringLiteral("X")), 0, 1);
-        stageAbsLayout->addWidget(new QLabel(QStringLiteral("Y")), 0, 2);
-        stageAbsLayout->addWidget(new QLabel(QStringLiteral("Z")), 0, 3);
+        stageAbsLayout->setHorizontalSpacing(8);
+        stageAbsLayout->setVerticalSpacing(4);
+        stageAbsLayout->addWidget(new QLabel(QStringLiteral("X")), 0, 0);
+        stageAbsLayout->addWidget(new QLabel(QStringLiteral("Y")), 0, 1);
+        stageAbsLayout->addWidget(new QLabel(QStringLiteral("Z")), 0, 2);
         m_stageMoveAbsXSpin = createStageDoubleSpin(-10000.0, 10000.0, 0.1, 0.0);
+        m_stageMoveAbsXSpin->setObjectName(QStringLiteral("stage_moveAbsXSpin"));
         m_stageMoveAbsYSpin = createStageDoubleSpin(-10000.0, 10000.0, 0.1, 0.0);
+        m_stageMoveAbsYSpin->setObjectName(QStringLiteral("stage_moveAbsYSpin"));
         m_stageMoveAbsZSpin = createStageDoubleSpin(-10000.0, 10000.0, 0.1, 0.0);
+        m_stageMoveAbsZSpin->setObjectName(QStringLiteral("stage_moveAbsZSpin"));
         for (QDoubleSpinBox* s : {m_stageMoveAbsXSpin, m_stageMoveAbsYSpin, m_stageMoveAbsZSpin}) {
-            s->setMaximumWidth(88);
+            s->setMinimumWidth(90);
         }
-        stageAbsLayout->addWidget(m_stageMoveAbsXSpin, 1, 1);
-        stageAbsLayout->addWidget(m_stageMoveAbsYSpin, 1, 2);
-        stageAbsLayout->addWidget(m_stageMoveAbsZSpin, 1, 3);
-
+        stageAbsLayout->addWidget(m_stageMoveAbsXSpin, 1, 0);
+        stageAbsLayout->addWidget(m_stageMoveAbsYSpin, 1, 1);
+        stageAbsLayout->addWidget(m_stageMoveAbsZSpin, 1, 2);
+        moveVBox->addLayout(stageAbsLayout);
         QHBoxLayout* stageAbsActionLayout = new QHBoxLayout();
-        stageAbsActionLayout->setSpacing(4);
-        stageAbsActionLayout->addWidget(new QLabel(QStringLiteral("超时")));
+        stageAbsActionLayout->setSpacing(6);
+        QLabel* toLbl = new QLabel(QStringLiteral("到位超时"));
+        toLbl->setToolTip(QStringLiteral("MoveAbs 等待完成的最长时间"));
         m_stageMoveTimeoutSpin = new QSpinBox();
+        m_stageMoveTimeoutSpin->setObjectName(QStringLiteral("stage_moveTimeoutSpin"));
         m_stageMoveTimeoutSpin->setRange(100, 600000);
         m_stageMoveTimeoutSpin->setValue(10000);
-        m_stageMoveTimeoutSpin->setMaximumWidth(90);
+        m_stageMoveTimeoutSpin->setMinimumWidth(100);
         m_stageMoveTimeoutSpin->setSuffix(QStringLiteral(" ms"));
-        m_stageMoveAbsButton = new QPushButton(QStringLiteral("MoveAbs"));
+        m_stageMoveAbsButton = new QPushButton(QStringLiteral("执行绝对运动"));
+        m_stageMoveAbsButton->setObjectName(QStringLiteral("stage_moveAbsButton"));
+        m_stageMoveAbsButton->setToolTip(QStringLiteral("MoveAbs"));
+        stageAbsActionLayout->addWidget(toLbl);
         stageAbsActionLayout->addWidget(m_stageMoveTimeoutSpin);
         stageAbsActionLayout->addWidget(m_stageMoveAbsButton);
         stageAbsActionLayout->addStretch();
-
+        moveVBox->addLayout(stageAbsActionLayout);
+        QFrame* moveSep = new QFrame();
+        moveSep->setFrameShape(QFrame::HLine);
+        moveSep->setFrameShadow(QFrame::Sunken);
+        moveVBox->addWidget(moveSep);
+        QLabel* relCap = new QLabel(QStringLiteral("相对位移 (mm)"));
+        relCap->setStyleSheet(QStringLiteral("font-weight: bold;"));
+        moveVBox->addWidget(relCap);
         QHBoxLayout* stageRelLayout = new QHBoxLayout();
-        stageRelLayout->setSpacing(4);
-        stageRelLayout->addWidget(new QLabel(QStringLiteral("Rel")));
+        stageRelLayout->setSpacing(6);
+        stageRelLayout->addWidget(new QLabel(QStringLiteral("轴")));
         m_stageMoveRelAxisCombo = new QComboBox();
+        m_stageMoveRelAxisCombo->setObjectName(QStringLiteral("stage_moveRelAxisCombo"));
         m_stageMoveRelAxisCombo->addItem(QStringLiteral("X"), QStringLiteral("x"));
         m_stageMoveRelAxisCombo->addItem(QStringLiteral("Y"), QStringLiteral("y"));
         m_stageMoveRelAxisCombo->addItem(QStringLiteral("Z"), QStringLiteral("z"));
-        m_stageMoveRelAxisCombo->setMaximumWidth(48);
+        m_stageMoveRelAxisCombo->setMinimumWidth(56);
         m_stageMoveRelDeltaSpin = createStageDoubleSpin(-10000.0, 10000.0, 0.1, 1.0);
-        m_stageMoveRelDeltaSpin->setMaximumWidth(88);
-        m_stageMoveRelButton = new QPushButton(QStringLiteral("MoveRel"));
+        m_stageMoveRelDeltaSpin->setObjectName(QStringLiteral("stage_moveRelDeltaSpin"));
+        m_stageMoveRelDeltaSpin->setMinimumWidth(90);
+        m_stageMoveRelDeltaSpin->setToolTip(QStringLiteral("沿选定轴移动的增量（mm），即 MoveRel 的 delta"));
+        m_stageMoveRelButton = new QPushButton(QStringLiteral("执行相对运动"));
+        m_stageMoveRelButton->setObjectName(QStringLiteral("stage_moveRelButton"));
+        m_stageMoveRelButton->setToolTip(QStringLiteral("MoveRel"));
         stageRelLayout->addWidget(m_stageMoveRelAxisCombo);
+        QLabel* relDeltaLbl = new QLabel(QStringLiteral("增量"));
+        relDeltaLbl->setToolTip(QStringLiteral("相对位移量 (mm)"));
+        stageRelLayout->addWidget(relDeltaLbl);
         stageRelLayout->addWidget(m_stageMoveRelDeltaSpin);
         stageRelLayout->addWidget(m_stageMoveRelButton);
         stageRelLayout->addStretch();
+        moveVBox->addLayout(stageRelLayout);
+        stageLayout->addWidget(stageMoveGroup);
 
-        stageLayout->addLayout(stageJogLayout);
-        stageLayout->addLayout(stageAbsLayout);
-        stageLayout->addLayout(stageAbsActionLayout);
-        stageLayout->addLayout(stageRelLayout);
-
-        addStageHeading(QStringLiteral("速度"),
-                        QStringLiteral("SetSpeed：脉冲/秒与加减速时间(ms)"));
-        QHBoxLayout* stageSpeedLayout = new QHBoxLayout();
-        stageSpeedLayout->setSpacing(4);
-        stageSpeedLayout->addWidget(new QLabel(QStringLiteral("脉冲/s")));
+        // —— 速度 / 加速度 ——
+        QGroupBox* stageSpeedGroup = new QGroupBox(QStringLiteral("运动参数 (SetSpeed)"));
+        stageSpeedGroup->setObjectName(QStringLiteral("stage_group_speed"));
+        stageSpeedGroup->setToolTip(QStringLiteral("脉冲/秒 与 加减速时间 (ms)"));
+        QHBoxLayout* stageSpeedLayout = new QHBoxLayout(stageSpeedGroup);
+        stageSpeedLayout->setContentsMargins(8, 8, 8, 8);
+        stageSpeedLayout->setSpacing(6);
+        QLabel* spdLbl = new QLabel(QStringLiteral("速度"));
+        spdLbl->setToolTip(QStringLiteral("pulse/s"));
         m_stageSpeedSpin = new QSpinBox();
+        m_stageSpeedSpin->setObjectName(QStringLiteral("stage_speedSpin"));
         m_stageSpeedSpin->setRange(1, 10000000);
         m_stageSpeedSpin->setValue(20000);
-        m_stageSpeedSpin->setMaximumWidth(100);
+        m_stageSpeedSpin->setSuffix(QStringLiteral(" 脉冲/s"));
+        m_stageSpeedSpin->setMinimumWidth(112);
+        stageSpeedLayout->addWidget(spdLbl);
         stageSpeedLayout->addWidget(m_stageSpeedSpin);
-        stageSpeedLayout->addWidget(new QLabel(QStringLiteral("加速ms")));
+        QLabel* accLbl = new QLabel(QStringLiteral("加速"));
+        accLbl->setToolTip(QStringLiteral("加减速时间"));
         m_stageAccelSpin = new QSpinBox();
+        m_stageAccelSpin->setObjectName(QStringLiteral("stage_accelSpin"));
         m_stageAccelSpin->setRange(0, 600000);
         m_stageAccelSpin->setValue(100);
-        m_stageAccelSpin->setMaximumWidth(80);
+        m_stageAccelSpin->setSuffix(QStringLiteral(" ms"));
+        m_stageAccelSpin->setMinimumWidth(88);
+        stageSpeedLayout->addWidget(accLbl);
         stageSpeedLayout->addWidget(m_stageAccelSpin);
-        m_stageSetSpeedButton = new QPushButton(QStringLiteral("设速"));
+        m_stageSetSpeedButton = new QPushButton(QStringLiteral("应用"));
+        m_stageSetSpeedButton->setObjectName(QStringLiteral("stage_setSpeedButton"));
+        m_stageSetSpeedButton->setToolTip(QStringLiteral("SetSpeed"));
         stageSpeedLayout->addWidget(m_stageSetSpeedButton);
         stageSpeedLayout->addStretch();
+        stageLayout->addWidget(stageSpeedGroup);
 
-        stageLayout->addLayout(stageSpeedLayout);
-
-        addStageHeading(QStringLiteral("扫描"),
-                        QStringLiteral("StartScan / StopScan / GetScanStatus"));
+        // —— 区域扫描 ——
+        QGroupBox* stageScanGroup = new QGroupBox(QStringLiteral("区域扫描 (StartScan / StopScan)"));
+        stageScanGroup->setObjectName(QStringLiteral("stage_group_scan"));
+        stageScanGroup->setToolTip(QStringLiteral("在 XY 平面按模式步进扫描；Z 为固定高度"));
+        QVBoxLayout* scanVBox = new QVBoxLayout(stageScanGroup);
+        scanVBox->setContentsMargins(8, 8, 8, 8);
+        scanVBox->setSpacing(6);
         QFormLayout* stageScanFormLayout = new QFormLayout();
-        stageScanFormLayout->setSpacing(2);
-        stageScanFormLayout->setContentsMargins(0, 0, 0, 0);
+        stageScanFormLayout->setSpacing(6);
         stageScanFormLayout->setFieldGrowthPolicy(QFormLayout::ExpandingFieldsGrow);
-
         m_stageScanModeCombo = new QComboBox();
+        m_stageScanModeCombo->setObjectName(QStringLiteral("stage_scanModeCombo"));
         m_stageScanModeCombo->addItem(QStringLiteral("蛇形"), QStringLiteral("snake"));
         m_stageScanModeCombo->addItem(QStringLiteral("往返"), QStringLiteral("alternate_return"));
         m_stageScanXsSpin = createStageDoubleSpin(-10000.0, 10000.0, 0.1, 0.0);
+        m_stageScanXsSpin->setObjectName(QStringLiteral("stage_scanXsSpin"));
         m_stageScanXeSpin = createStageDoubleSpin(-10000.0, 10000.0, 0.1, 10.0);
+        m_stageScanXeSpin->setObjectName(QStringLiteral("stage_scanXeSpin"));
         m_stageScanYsSpin = createStageDoubleSpin(-10000.0, 10000.0, 0.1, 0.0);
+        m_stageScanYsSpin->setObjectName(QStringLiteral("stage_scanYsSpin"));
         m_stageScanYeSpin = createStageDoubleSpin(-10000.0, 10000.0, 0.1, 10.0);
+        m_stageScanYeSpin->setObjectName(QStringLiteral("stage_scanYeSpin"));
         m_stageScanStepSpin = createStageDoubleSpin(0.001, 10000.0, 0.1, 1.0);
+        m_stageScanStepSpin->setObjectName(QStringLiteral("stage_scanStepSpin"));
         m_stageScanZFixSpin = createStageDoubleSpin(-10000.0, 10000.0, 0.1, 0.0);
+        m_stageScanZFixSpin->setObjectName(QStringLiteral("stage_scanZFixSpin"));
         for (QDoubleSpinBox* s : {m_stageScanXsSpin,
-                                m_stageScanXeSpin,
-                                m_stageScanYsSpin,
-                                m_stageScanYeSpin,
-                                m_stageScanStepSpin,
-                                m_stageScanZFixSpin}) {
-            s->setMaximumWidth(96);
+                                  m_stageScanXeSpin,
+                                  m_stageScanYsSpin,
+                                  m_stageScanYeSpin,
+                                  m_stageScanStepSpin,
+                                  m_stageScanZFixSpin}) {
+            s->setMinimumWidth(88);
         }
-
-        stageScanFormLayout->addRow(QStringLiteral("模式"), m_stageScanModeCombo);
-        stageScanFormLayout->addRow(QStringLiteral("Xs"), m_stageScanXsSpin);
-        stageScanFormLayout->addRow(QStringLiteral("Xe"), m_stageScanXeSpin);
-        stageScanFormLayout->addRow(QStringLiteral("Ys"), m_stageScanYsSpin);
-        stageScanFormLayout->addRow(QStringLiteral("Ye"), m_stageScanYeSpin);
-        stageScanFormLayout->addRow(QStringLiteral("步长"), m_stageScanStepSpin);
-        stageScanFormLayout->addRow(QStringLiteral("Z"), m_stageScanZFixSpin);
-
+        stageScanFormLayout->addRow(QStringLiteral("扫描模式"), m_stageScanModeCombo);
+        auto makeRangeRow = [](QDoubleSpinBox* from, QDoubleSpinBox* to) {
+            QWidget* w = new QWidget();
+            QHBoxLayout* h = new QHBoxLayout(w);
+            h->setContentsMargins(0, 0, 0, 0);
+            h->setSpacing(4);
+            h->addWidget(new QLabel(QStringLiteral("从")));
+            h->addWidget(from, 1);
+            h->addWidget(new QLabel(QStringLiteral("到")));
+            h->addWidget(to, 1);
+            return w;
+        };
+        stageScanFormLayout->addRow(QStringLiteral("X 范围 (mm)"), makeRangeRow(m_stageScanXsSpin, m_stageScanXeSpin));
+        stageScanFormLayout->addRow(QStringLiteral("Y 范围 (mm)"), makeRangeRow(m_stageScanYsSpin, m_stageScanYeSpin));
+        stageScanFormLayout->addRow(QStringLiteral("步长 (mm)"), m_stageScanStepSpin);
+        stageScanFormLayout->addRow(QStringLiteral("Z 固定 (mm)"), m_stageScanZFixSpin);
+        scanVBox->addLayout(stageScanFormLayout);
         QHBoxLayout* stageScanActionLayout = new QHBoxLayout();
-        stageScanActionLayout->setSpacing(4);
-        m_stageStartScanButton = new QPushButton(QStringLiteral("开扫"));
-        m_stageStopScanButton = new QPushButton(QStringLiteral("停扫"));
-        m_stageScanStatusButton = new QPushButton(QStringLiteral("状态"));
+        stageScanActionLayout->setSpacing(6);
+        m_stageStartScanButton = new QPushButton(QStringLiteral("开始扫描"));
+        m_stageStartScanButton->setObjectName(QStringLiteral("stage_startScanButton"));
+        m_stageStartScanButton->setToolTip(QStringLiteral("StartScan"));
+        m_stageStopScanButton = new QPushButton(QStringLiteral("停止扫描"));
+        m_stageStopScanButton->setObjectName(QStringLiteral("stage_stopScanButton"));
+        m_stageStopScanButton->setToolTip(QStringLiteral("StopScan"));
+        m_stageScanStatusButton = new QPushButton(QStringLiteral("查询状态"));
+        m_stageScanStatusButton->setObjectName(QStringLiteral("stage_scanStatusButton"));
+        m_stageScanStatusButton->setToolTip(QStringLiteral("GetScanStatus"));
         stageScanActionLayout->addWidget(m_stageStartScanButton);
         stageScanActionLayout->addWidget(m_stageStopScanButton);
         stageScanActionLayout->addWidget(m_stageScanStatusButton);
         stageScanActionLayout->addStretch();
+        scanVBox->addLayout(stageScanActionLayout);
+        stageLayout->addWidget(stageScanGroup);
 
-        m_stageScanStatusLabel = new QLabel(QStringLiteral("扫描: —"));
-        m_stageCommandResultLabel = new QLabel(QStringLiteral("结果: —"));
+        // —— 反馈信息 ——
+        QGroupBox* stageFbGroup = new QGroupBox(QStringLiteral("执行反馈"));
+        stageFbGroup->setObjectName(QStringLiteral("stage_group_feedback"));
+        QVBoxLayout* fbVBox = new QVBoxLayout(stageFbGroup);
+        fbVBox->setContentsMargins(8, 8, 8, 8);
+        fbVBox->setSpacing(4);
+        m_stageScanStatusLabel = new QLabel(QStringLiteral("扫描状态: —"));
+        m_stageScanStatusLabel->setObjectName(QStringLiteral("stage_scanStatusLabel"));
+        m_stageScanStatusLabel->setWordWrap(true);
+        m_stageCommandResultLabel = new QLabel(QStringLiteral("最近结果: —"));
+        m_stageCommandResultLabel->setObjectName(QStringLiteral("stage_commandResultLabel"));
         m_stageCommandResultLabel->setWordWrap(true);
+        m_stageCommandResultLabel->setTextInteractionFlags(Qt::TextSelectableByMouse);
+        fbVBox->addWidget(m_stageScanStatusLabel);
+        fbVBox->addWidget(m_stageCommandResultLabel);
+        stageLayout->addWidget(stageFbGroup);
 
-        stageLayout->addLayout(stageScanFormLayout);
-        stageLayout->addLayout(stageScanActionLayout);
-        stageLayout->addWidget(m_stageScanStatusLabel);
-        stageLayout->addWidget(m_stageCommandResultLabel);
-
-        addStageHeading(QStringLiteral("文本指令"),
-                        QStringLiteral("发往三轴台工装 gRPC 的文本命令；勿使用底部「HEX发送」。输入 help 查看列表。"));
+        // —— 文本指令 ——
+        QGroupBox* stageTxtGroup = new QGroupBox(QStringLiteral("文本指令 (调试)"));
+        stageTxtGroup->setObjectName(QStringLiteral("stage_group_textcmd"));
+        stageTxtGroup->setToolTip(QStringLiteral(
+            "发往三轴台工装 gRPC 的文本命令；勿使用底部「HEX发送」。输入 help 查看列表。"));
+        QVBoxLayout* txtVBox = new QVBoxLayout(stageTxtGroup);
+        txtVBox->setContentsMargins(8, 8, 8, 8);
+        txtVBox->setSpacing(6);
         m_stageCustomCommandEdit = new QLineEdit();
-        m_stageCustomCommandEdit->setPlaceholderText(QStringLiteral("get_positions / help / …"));
+        m_stageCustomCommandEdit->setObjectName(QStringLiteral("stage_customCommandEdit"));
+        m_stageCustomCommandEdit->setPlaceholderText(QStringLiteral("例: get_positions / help / …"));
         QHBoxLayout* stageCustomCmdButtons = new QHBoxLayout();
-        stageCustomCmdButtons->setSpacing(4);
+        stageCustomCmdButtons->setSpacing(6);
         m_stageCustomCommandSendButton = new QPushButton(QStringLiteral("发送"));
+        m_stageCustomCommandSendButton->setObjectName(QStringLiteral("stage_customCommandSendButton"));
         m_stageCommandHelpButton = new QPushButton(QStringLiteral("帮助"));
+        m_stageCommandHelpButton->setObjectName(QStringLiteral("stage_commandHelpButton"));
         stageCustomCmdButtons->addWidget(m_stageCustomCommandSendButton);
         stageCustomCmdButtons->addWidget(m_stageCommandHelpButton);
         stageCustomCmdButtons->addStretch();
-        stageLayout->addWidget(m_stageCustomCommandEdit);
-        stageLayout->addLayout(stageCustomCmdButtons);
+        txtVBox->addWidget(m_stageCustomCommandEdit);
+        txtVBox->addLayout(stageCustomCmdButtons);
+        stageLayout->addWidget(stageTxtGroup);
 
         auto* stageScroll = new QScrollArea();
         stageScroll->setWidgetResizable(true);

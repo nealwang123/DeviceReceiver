@@ -316,18 +316,26 @@ def serve(port: int, generator: DataGenerator, interval_ms: int):
     print(f"    ping / status")
     print("=" * 60)
 
-    # 优雅退出
+    # 优雅退出（Windows: 避免无限 wait() 导致 Ctrl+C 长期无效，见短超时轮询）
     stop_event = threading.Event()
 
     def on_signal(sig, frame):
-        print("\n[信号] 正在关闭服务器...")
+        print("\n[信号] 正在关闭服务器...", flush=True)
         stop_event.set()
 
-    signal.signal(signal.SIGINT, on_signal)
-    signal.signal(signal.SIGTERM, on_signal)
+    try:
+        signal.signal(signal.SIGINT, on_signal)
+    except (ValueError, OSError):
+        pass
+    if hasattr(signal, "SIGTERM"):
+        try:
+            signal.signal(signal.SIGTERM, on_signal)
+        except (ValueError, OSError):
+            pass
 
     try:
-        stop_event.wait()
+        while not stop_event.is_set():
+            stop_event.wait(timeout=0.3)
     except KeyboardInterrupt:
         pass
 
