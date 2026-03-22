@@ -361,7 +361,8 @@ BaudRate=115200
 
 [Receiver]
 BackendType=grpc
-GrpcEndpoint=127.0.0.1:50051
+GrpcEndpoint=[::1]:50051
+StageGrpcEndpoint=[::1]:50052
 UseMockData=false
 MockDataIntervalMs=100
 
@@ -383,7 +384,8 @@ maxHistory=20
 | **Serial/Port** | COM3 | 串口端口名称 |
 | **Serial/BaudRate** | 115200 | 波特率 |
 | **Receiver/BackendType** | grpc | 接收后端（serial/grpc） |
-| **Receiver/GrpcEndpoint** | 127.0.0.1:50051 | gRPC 服务端地址 |
+| **Receiver/GrpcEndpoint** | （启动时为本机 IPv6 + 50051） | 被测设备 DeviceDataService gRPC 地址，支持 IPv6：`[addr]:port` |
+| **Receiver/StageGrpcEndpoint** | （启动时为本机 IPv6 + 50052） | 三轴台 StageService gRPC 地址，独立配置 |
 | **Receiver/UseMockData** | false | 是否启用本地模拟（true=mock, false=真实服务） |
 | **Receiver/MockDataIntervalMs** | 100 | 模拟数据间隔(ms) |
 | **UI/showDevicePanel** | true | 显示设备面板 |

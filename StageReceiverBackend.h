@@ -19,8 +19,8 @@
  * @brief StageService 三轴控制台接收后端
  *
  * endpoint 约定：
- *   - "grpcHost:grpcPort"
- *   - "grpcHost:grpcPort|stageIp:stagePort"（可选，显式指定 Stage Connect 目标）
+ *   - "grpcHost:grpcPort" 或 IPv6 "[grpcHost]:grpcPort"
+ *   - "…|stageHost:stagePort"（可选，显式指定 Stage Connect 目标；IPv6 同样用方括号）
  *
  * 行为：
  *   - connectBackend：建立 gRPC Channel，并调用 StageService::Connect。

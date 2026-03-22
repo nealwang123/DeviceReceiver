@@ -1,4 +1,21 @@
 @echo off
+REM ============================================================================
+REM  build_cmake.bat — CMake 一键配置/编译 DeviceReceiver（推荐主构建入口）
+REM ----------------------------------------------------------------------------
+REM  功能概要:
+REM    - 自动探测 VS / vcpkg / Qt，调用 CMake 生成 NMake 或 Ninja 工程
+REM    - 可选启用 HDF5、gRPC、WASM；默认 BUILD_TESTS=ON 时顺带编译三轴台 Qt Test
+REM    - Release 成功后可 windeployqt，复制 HDF5/gRPC DLL 到 exe 目录
+REM  输出:
+REM    - 构建目录: 默认 .\build_cmake\（与 BUILD_DIR 变量一致）
+REM    - 主程序:   build_cmake\build\release\realtime_data.exe（Debug 则为 debug）
+REM  常用命令:
+REM    build_cmake.bat
+REM    build_cmake.bat -Debug -Run
+REM    build_cmake.bat -Clean
+REM    build_cmake.bat -NoGrpc -NoHdf5
+REM  详细参数: 执行 build_cmake.bat -Help
+REM ============================================================================
 setlocal EnableExtensions EnableDelayedExpansion
 chcp 65001 >nul
 

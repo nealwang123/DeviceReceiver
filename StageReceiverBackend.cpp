@@ -1,4 +1,5 @@
 #include "StageReceiverBackend.h"
+#include "GrpcEndpointUtils.h"
 
 #include <QDateTime>
 #include <QJsonDocument>
@@ -126,7 +127,9 @@ bool StageReceiverBackend::connectBackend(const QString& endpoint)
     QString stageIp;
     int stagePort = 0;
     if (!parseEndpoint(endpoint, &grpcEndpoint, &stageIp, &stagePort)) {
-        emit commandError(QStringLiteral("Stage endpoint 格式无效，请使用 host:port 或 host:port|stageIp:stagePort"));
+        emit commandError(QStringLiteral(
+            "Stage endpoint 格式无效。示例: host:port、[IPv6]:port，或 grpc 段|台下位机段，如 "
+            "[::1]:50052|192.168.1.10:9000"));
         return false;
     }
 
@@ -1190,34 +1193,14 @@ bool StageReceiverBackend::parseEndpoint(const QString& endpoint,
     const QString grpcPart = segments.value(0).trimmed();
     const QString stagePart = (segments.size() > 1) ? segments.at(1).trimmed() : QString();
 
-    auto parseHostPort = [](const QString& text, QString* host, int* port) -> bool {
-        const QRegularExpression re(QStringLiteral(R"(^\s*([^:\s]+)\s*:\s*(\d{1,5})\s*$)"));
-        const QRegularExpressionMatch match = re.match(text);
-        if (!match.hasMatch()) {
-            return false;
-        }
-
-        const int parsedPort = match.captured(2).toInt();
-        if (parsedPort <= 0 || parsedPort > 65535) {
-            return false;
-        }
-
-        if (host) {
-            *host = match.captured(1).trimmed();
-        }
-        if (port) {
-            *port = parsedPort;
-        }
-        return true;
-    };
-
+    QString grpcTarget;
     QString grpcHost;
     int grpcPort = 0;
-    if (!parseHostPort(grpcPart, &grpcHost, &grpcPort)) {
+    if (!GrpcEndpointUtils::parseHostPort(grpcPart, &grpcTarget, &grpcHost, &grpcPort)) {
         return false;
     }
 
-    *grpcEndpoint = QStringLiteral("%1:%2").arg(grpcHost).arg(grpcPort);
+    *grpcEndpoint = grpcTarget;
 
     if (stagePart.isEmpty()) {
         *stageIp = grpcHost;
@@ -1227,7 +1210,7 @@ bool StageReceiverBackend::parseEndpoint(const QString& endpoint,
 
     QString parsedStageIp;
     int parsedStagePort = 0;
-    if (!parseHostPort(stagePart, &parsedStageIp, &parsedStagePort)) {
+    if (!GrpcEndpointUtils::parseHostPort(stagePart, nullptr, &parsedStageIp, &parsedStagePort)) {
         return false;
     }
 

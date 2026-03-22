@@ -7,15 +7,64 @@
 #include <QDebug>
 #include <QApplication>
 #ifndef QT_COMPILE_FOR_WASM
+#include <QAbstractSocket>
+#include <QHostAddress>
+#include <QNetworkInterface>
 #include <QSerialPort>
 #endif
 
+namespace {
+
+#ifndef QT_COMPILE_FOR_WASM
+QString bracketedPreferredLocalIpv6()
+{
+    // 使用 allAddresses()，避免在源码中出现 QNetworkInterfaceAddressEntry
+    // （部分 MSVC + Windows 头文件组合下会与宏/解析冲突导致 C4430）
+    QString globalV6;
+    QString linkLocalV6;
+    for (const QHostAddress& addr : QNetworkInterface::allAddresses()) {
+        if (addr.protocol() != QAbstractSocket::IPv6Protocol) {
+            continue;
+        }
+        if (addr.isLoopback()) {
+            continue;
+        }
+        const QString base = addr.toString().split(QLatin1Char('%')).first();
+        if (addr.isLinkLocal()) {
+            if (linkLocalV6.isEmpty()) {
+                linkLocalV6 = base;
+            }
+            continue;
+        }
+        if (globalV6.isEmpty()) {
+            globalV6 = base;
+        }
+    }
+
+    const QString chosen = !globalV6.isEmpty() ? globalV6 : (!linkLocalV6.isEmpty() ? linkLocalV6 : QStringLiteral("::1"));
+    return QStringLiteral("[%1]").arg(chosen);
+}
+#else
+QString bracketedPreferredLocalIpv6()
+{
+    return QStringLiteral("[::1]");
+}
+#endif
+
+QString defaultGrpcEndpoint(int port)
+{
+    return QStringLiteral("%1:%2").arg(bracketedPreferredLocalIpv6()).arg(port);
+}
+
+} // namespace
+
 AppConfig* AppConfig::m_instance = nullptr;
 
-AppConfig::AppConfig(QObject *parent)
+AppConfig::AppConfig(QObject* parent)
     : QObject(parent)
+    , m_grpcEndpoint(defaultGrpcEndpoint(50051))
+    , m_stageGrpcEndpoint(defaultGrpcEndpoint(50052))
 {
-    // 构造函数留空，配置已在成员变量中初始化
 }
 
 AppConfig* AppConfig::instance()
@@ -79,6 +128,20 @@ bool AppConfig::loadFromFile(const QString& filename)
         m_receiverBackendType = QStringLiteral("grpc");
     }
     m_grpcEndpoint = settings.value("Receiver/GrpcEndpoint", m_grpcEndpoint).toString();
+    if (m_grpcEndpoint.trimmed().isEmpty()) {
+        m_grpcEndpoint = defaultGrpcEndpoint(50051);
+    }
+
+    if (settings.contains(QStringLiteral("Receiver/StageGrpcEndpoint"))) {
+        m_stageGrpcEndpoint = settings.value(QStringLiteral("Receiver/StageGrpcEndpoint")).toString();
+    } else {
+        // 旧版仅一路 GrpcEndpoint 时，三轴台与被测设备共用同一字段
+        m_stageGrpcEndpoint = settings.value(QStringLiteral("Receiver/GrpcEndpoint"), m_stageGrpcEndpoint).toString();
+    }
+    if (m_stageGrpcEndpoint.trimmed().isEmpty()) {
+        m_stageGrpcEndpoint = defaultGrpcEndpoint(50052);
+    }
+
     // 优先读 [Receiver] 下的配置，兼容历史版本中存放在 [Serial] 下的写法
     if (settings.contains("Receiver/UseMockData")) {
         m_useMockData = settings.value("Receiver/UseMockData").toBool();
@@ -144,6 +207,7 @@ bool AppConfig::saveToFile(const QString& filename)
     settings.setValue("Serial/BaudRate", m_baudRate);
     settings.setValue("Receiver/BackendType", m_receiverBackendType);
     settings.setValue("Receiver/GrpcEndpoint", m_grpcEndpoint);
+    settings.setValue("Receiver/StageGrpcEndpoint", m_stageGrpcEndpoint);
     settings.setValue("Receiver/UseMockData", m_useMockData);
     settings.setValue("Receiver/MockDataIntervalMs", m_mockDataIntervalMs);
     
@@ -196,7 +260,8 @@ void AppConfig::loadDefaults()
     m_serialPort = "COM3";
     m_baudRate = 115200;
     m_receiverBackendType = "grpc";
-    m_grpcEndpoint = "127.0.0.1:50051";
+    m_grpcEndpoint = defaultGrpcEndpoint(50051);
+    m_stageGrpcEndpoint = defaultGrpcEndpoint(50052);
     m_useMockData = false;
     m_mockDataIntervalMs = 100;
     m_maxPlotPoints = 200;

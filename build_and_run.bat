@@ -1,4 +1,18 @@
 @echo off
+REM ============================================================================
+REM  build_and_run.bat — qmake + nmake 传统构建（与 build_cmake.bat 二选一）
+REM ----------------------------------------------------------------------------
+REM  功能概要:
+REM    - 使用 realtime_data.pro + 本机 Qt qmake 生成 Makefile 并编译
+REM    - 可选启用 HDF5 / gRPC（CONFIG+=hdf5 / grpc_client），可传根目录
+REM    - 可选 -Install* 通过 vcpkg 尝试安装依赖（脚本内逻辑）
+REM  适用场景:
+REM    - 习惯 Qt 工程 .pro 流程、或需与历史 qmake 脚本一致时使用
+REM  输出:
+REM    - 默认产物在 build\release\realtime_data.exe（依脚本内路径）
+REM  若需 CMake + vcpkg 统一集成，优先使用 build_cmake.bat
+REM  详细参数见脚本末尾 :show_help 或执行 -Help
+REM ============================================================================
 setlocal EnableExtensions EnableDelayedExpansion
 chcp 65001 >nul
 

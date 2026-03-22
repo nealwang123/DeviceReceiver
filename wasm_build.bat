@@ -1,7 +1,17 @@
 @echo off
 setlocal enabledelayedexpansion
 REM ============================================================
-REM  WebAssembly Build Script
+REM  wasm_build.bat — Qt5 WebAssembly 前端构建（与桌面 CMake 构建独立）
+REM ------------------------------------------------------------
+REM  功能概要:
+REM    - 使用 Emscripten + Qt wasm_32 工具链编译 realtime_data.pro
+REM    - 子命令: 无参=增量编译 | clean | rebuild | serve(本地预览) | deploy(docs 部署)
+REM  依赖（请按本机修改脚本内路径）:
+REM    - QT_WASM_ROOT、emsdk / Emscripten 路径
+REM  输出目录: 默认 build-wasm\
+REM  桌面 Windows 可执行文件请使用 build_cmake.bat，勿与本脚本混淆
+REM ------------------------------------------------------------
+REM  WebAssembly Build Script (English quick ref)
 REM  Usage: wasm_build.bat [clean|rebuild|serve|deploy]
 REM    (none)  - incremental build
 REM    clean   - clean build-wasm directory only

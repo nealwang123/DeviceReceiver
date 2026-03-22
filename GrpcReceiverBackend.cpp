@@ -1,4 +1,5 @@
 #include "GrpcReceiverBackend.h"
+#include "GrpcEndpointUtils.h"
 
 #include <QDateTime>
 #include <QJsonDocument>
@@ -40,11 +41,13 @@ GrpcReceiverBackend::~GrpcReceiverBackend()
 
 bool GrpcReceiverBackend::connectBackend(const QString& endpoint)
 {
-    m_endpoint = endpoint.trimmed();
-    if (m_endpoint.isEmpty()) {
-        emit commandError("gRPC endpoint 不能为空");
+    QString grpcTarget;
+    if (!GrpcEndpointUtils::parseHostPort(endpoint, &grpcTarget, nullptr, nullptr)) {
+        emit commandError(QStringLiteral(
+            "gRPC 地址格式无效。示例: 127.0.0.1:50051、device.local:50051、或 IPv6: [::1]:50051"));
         return false;
     }
+    m_endpoint = grpcTarget;
 
     // ---- Mock 模式：直接标记已连接，无需网络 ----
     if (m_mockMode.load()) {

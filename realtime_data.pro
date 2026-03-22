@@ -1,4 +1,4 @@
-QT += core gui widgets
+QT += core gui widgets network
 # 根据编译目标条件添加模块
 !wasm {
     QT += serialport
@@ -237,6 +237,7 @@ SOURCES += main.cpp \
 
 # 头文件列表
 HEADERS += FrameData.h \
+           GrpcEndpointUtils.h \
            DataCacheManager.h \
            DataExporter.h \
            IReceiverBackend.h \

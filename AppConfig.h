@@ -50,8 +50,13 @@ public:
     QString receiverBackendType() const { return m_receiverBackendType; }
     void setReceiverBackendType(const QString& type) { m_receiverBackendType = type; }
 
+    /** 被测设备 DeviceDataService gRPC 地址（如 [::1]:50051） */
     QString grpcEndpoint() const { return m_grpcEndpoint; }
     void setGrpcEndpoint(const QString& endpoint) { m_grpcEndpoint = endpoint; }
+
+    /** 三轴台 StageService gRPC 地址（可与被测设备不同端口/主机） */
+    QString stageGrpcEndpoint() const { return m_stageGrpcEndpoint; }
+    void setStageGrpcEndpoint(const QString& endpoint) { m_stageGrpcEndpoint = endpoint; }
     
     bool useMockData() const { return m_useMockData; }
     void setUseMockData(bool use) { m_useMockData = use; }
@@ -174,7 +179,8 @@ private:
     QString m_serialPort = "COM3";     // 串口端口
     int m_baudRate = 115200;           // 波特率
     QString m_receiverBackendType = "grpc";
-    QString m_grpcEndpoint = "127.0.0.1:50051";
+    QString m_grpcEndpoint;            // 构造时填默认本机 IPv6 + 端口
+    QString m_stageGrpcEndpoint;
     bool m_useMockData = false;        // 是否使用模拟数据
     int m_mockDataIntervalMs = 100;    // 模拟数据间隔（毫秒）
     

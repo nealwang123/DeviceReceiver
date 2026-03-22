@@ -80,6 +80,7 @@ set(SOURCE_FILES
 # 头文件列表
 set(HEADER_FILES
     FrameData.h
+    GrpcEndpointUtils.h
     DataCacheManager.h
     DataExporter.h
     IReceiverBackend.h

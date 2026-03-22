@@ -1,4 +1,13 @@
 @echo off
+REM ============================================================================
+REM  package_grpc_test_server.bat — 将 grpc_test_server.py 打成独立 exe（PyInstaller）
+REM ----------------------------------------------------------------------------
+REM  功能: 自动寻找可 import grpc/protobuf 的 Python，用 PyInstaller --onefile 打包
+REM        被测设备数据流 DeviceDataService（非三轴台 stage_grpc_test_server）
+REM  输出: build\release\grpc_test_server.exe（若存在 build\debug 会同步复制）
+REM  前置: 根目录存在 grpc_test_server.py 与 proto\generated_py\device_data_pb2*.py
+REM  首次会自动 pip install pyinstaller（若未安装）
+REM ============================================================================
 setlocal EnableExtensions EnableDelayedExpansion
 chcp 65001 >nul
 

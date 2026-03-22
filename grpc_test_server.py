@@ -1,24 +1,40 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-gRPC 测试服务器 — DeviceDataService（被测设备数据）
-==================================================
-**命名区分：** 三轴台工装 StageService 请使用同目录下的 `stage_grpc_test_server.py`
-（默认端口 50052），勿与本脚本混淆。
+grpc_test_server.py — 被测设备 gRPC 桩（DeviceDataService）
+==========================================================
+与 Qt 主程序「被测设备 gRPC」数据通道对应；**不是**三轴台 StageService。
 
-功能：
+功能概要
+  - Subscribe（服务端流）：按间隔推送模拟 DataFrame（多模式/多通道/噪声）
+  - SendCommand（一元）：接收 ping、set_mode、set_channels 等文本类控制指令
+
+运行
+  python grpc_test_server.py [--port 50051] [--channels 8] [--mode complex] ...
+
+默认监听 0.0.0.0:50051；配置中 Receiver/GrpcEndpoint 需与此一致（IPv6 用 [::1]:50051 等）。
+
+依赖
+  pip install grpcio protobuf；桩模块来自 proto/generated_py/device_data_pb2*.py
+
+相关文件
+  - 三轴台请用 stage_grpc_test_server.py（StageService，通常 50052）
+  - 打独立 exe：项目根目录 package_grpc_test_server.bat（PyInstaller）
+
+命名区分
+  三轴台工装 StageService 请使用同目录 stage_grpc_test_server.py（默认端口 50052），勿与本脚本混淆。
+
+功能细节
   1. Subscribe (Server-Streaming): 按客户端请求的间隔定时推送 DataFrame
      - 支持 MultiChannelReal / MultiChannelComplex / Legacy 三种模式
-    - 字段语义：Real(comp0=幅值, comp1=相位)，Complex(comp0=实部, comp1=虚部)
+     - 字段语义：Real(comp0=幅值, comp1=相位)，Complex(comp0=实部, comp1=虚部)
      - 数据为正弦波 + 噪声，便于在波形图上观察
   2. SendCommand (Unary): 接收客户端控制指令并返回确认响应
      - 支持运行时切换模式、通道数、频率等参数
 
-用法：
+用法（简）
   python grpc_test_server.py [--port 50051] [--channels 8] [--mode complex]
                              [--interval 100] [--noise 0.3]
-
-默认监听 0.0.0.0:50051，与 config.ini 中 GrpcEndpoint=127.0.0.1:50051 匹配。
 """
 
 import sys

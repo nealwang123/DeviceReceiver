@@ -446,7 +446,7 @@ void MainWindow::initUI()
         m_backendTypeCombo->addItem(QStringLiteral("gRPC（被测设备数据）"), "grpc");
         // 三轴台测试装置为独立 gRPC，不在此列出（见右侧「三轴台测试装置」面板）
         m_grpcEndpointEdit = new QLineEdit();
-        m_grpcEndpointEdit->setPlaceholderText(QStringLiteral("被测设备 gRPC，如 127.0.0.1:50051"));
+        m_grpcEndpointEdit->setPlaceholderText(QStringLiteral("被测设备 gRPC，如 127.0.0.1:50051 或 [::1]:50051"));
         m_baudRateCombo = new QComboBox();
         m_dataBitsCombo = new QComboBox();
         m_stopBitsCombo = new QComboBox();
@@ -646,7 +646,7 @@ void MainWindow::initUI()
         QGroupBox* stageGrpcGroup = new QGroupBox(QStringLiteral("连接与工装地址"));
         stageGrpcGroup->setObjectName(QStringLiteral("stage_group_grpc"));
         stageGrpcGroup->setToolTip(QStringLiteral(
-            "三轴台工装 gRPC 地址 host:port；若与台下位机 TCP 不同，使用 host:port|stageIp:stagePort"));
+            "三轴台 gRPC：host:port 或 [IPv6]:port；若与台下位机 TCP 不同，可用 grpc段|台下位机host:port"));
         QVBoxLayout* grpcVBox = new QVBoxLayout(stageGrpcGroup);
         grpcVBox->setContentsMargins(8, 8, 8, 8);
         grpcVBox->setSpacing(6);
@@ -656,9 +656,9 @@ void MainWindow::initUI()
         stageAddrLbl->setMinimumWidth(56);
         m_stageEndpointEdit = new QLineEdit();
         m_stageEndpointEdit->setObjectName(QStringLiteral("stage_endpointEdit"));
-        m_stageEndpointEdit->setPlaceholderText(QStringLiteral("例: 127.0.0.1:50052 或 host:port|ip:port"));
-        m_stageEndpointEdit->setToolTip(
-            QStringLiteral("与左侧「被测设备 gRPC」共用同一配置项保存；两路地址若不同需后续版本拆分为独立配置键。"));
+        m_stageEndpointEdit->setPlaceholderText(QStringLiteral("例: 127.0.0.1:50052 或 [::1]:50052 或 [::1]:50052|192.168.1.10:9000"));
+        m_stageEndpointEdit->setToolTip(QStringLiteral(
+            "独立保存于 config.ini 的 [Receiver]/StageGrpcEndpoint；与被测设备 GrpcEndpoint 可不同"));
         m_stageApplyEndpointButton = new QPushButton(QStringLiteral("应用"));
         m_stageApplyEndpointButton->setObjectName(QStringLiteral("stage_applyEndpointButton"));
         m_stageApplyEndpointButton->setToolTip(QStringLiteral("将地址写入配置（下次启动仍有效）"));
@@ -1238,27 +1238,11 @@ void MainWindow::initConnections()
         connect(m_backendTypeCombo, QOverload<int>::of(&QComboBox::currentIndexChanged),
             this, &MainWindow::onBackendTypeChanged);
 
-    connect(m_grpcEndpointEdit, &QLineEdit::textChanged, this, [this](const QString& endpoint) {
-        if (m_stageEndpointEdit && m_stageEndpointEdit->text() != endpoint) {
-            m_stageEndpointEdit->setText(endpoint);
-        }
-    });
-
-    connect(m_stageEndpointEdit, &QLineEdit::textEdited, this, [this](const QString& endpoint) {
-        if (m_grpcEndpointEdit && m_grpcEndpointEdit->text() != endpoint) {
-            m_grpcEndpointEdit->setText(endpoint);
-        }
-    });
-
     connect(m_stageApplyEndpointButton, &QPushButton::clicked, this, [this]() {
         const QString endpoint = m_stageEndpointEdit ? m_stageEndpointEdit->text().trimmed() : QString();
         if (endpoint.isEmpty()) {
             QMessageBox::warning(this, QStringLiteral("提示"), QStringLiteral("三轴台 gRPC 服务地址不能为空"));
             return;
-        }
-
-        if (m_grpcEndpointEdit) {
-            m_grpcEndpointEdit->setText(endpoint);
         }
 
         if (m_stageCommandResultLabel) {
@@ -1277,9 +1261,6 @@ void MainWindow::initConnections()
         if (endpoint.isEmpty()) {
             QMessageBox::warning(this, QStringLiteral("提示"), QStringLiteral("三轴台 gRPC 服务地址不能为空"));
             return;
-        }
-        if (m_grpcEndpointEdit) {
-            m_grpcEndpointEdit->setText(endpoint);
         }
         saveConfigFromUI();
         if (!m_appController) {
@@ -1572,6 +1553,14 @@ void MainWindow::loadConfigToUI()
     }
     
     // 加载串口配置
+    // 必须先写入 gRPC 地址，再 setCurrentIndex(BackendType)。
+    // 否则 setCurrentIndex 会同步触发 onBackendTypeChanged → saveConfigFromUI()，
+    // 此时输入框仍为空，会把 AppConfig 里的地址覆盖成空串，界面永远显示空白。
+    m_grpcEndpointEdit->setText(config->grpcEndpoint());
+    if (m_stageEndpointEdit) {
+        m_stageEndpointEdit->setText(config->stageGrpcEndpoint());
+    }
+
     const QString backendType = config->receiverBackendType().trimmed().toLower();
     QString effectiveBackend = backendType.isEmpty() ? QStringLiteral("grpc") : backendType;
     if (effectiveBackend.compare(QStringLiteral("stage"), Qt::CaseInsensitive) == 0) {
@@ -1579,10 +1568,9 @@ void MainWindow::loadConfigToUI()
         config->setReceiverBackendType(QStringLiteral("grpc"));
     }
     const int backendIndex = m_backendTypeCombo->findData(effectiveBackend);
-    m_backendTypeCombo->setCurrentIndex(backendIndex >= 0 ? backendIndex : 0);
-    m_grpcEndpointEdit->setText(config->grpcEndpoint());
-    if (m_stageEndpointEdit) {
-        m_stageEndpointEdit->setText(config->grpcEndpoint());
+    {
+        const QSignalBlocker blocker(m_backendTypeCombo);
+        m_backendTypeCombo->setCurrentIndex(backendIndex >= 0 ? backendIndex : 0);
     }
 
     const QString configuredSerialPort = config->serialPort().trimmed();
@@ -1628,6 +1616,9 @@ void MainWindow::saveConfigFromUI()
     // 保存串口配置
     config->setReceiverBackendType(m_backendTypeCombo->currentData().toString());
     config->setGrpcEndpoint(m_grpcEndpointEdit->text().trimmed());
+    if (m_stageEndpointEdit) {
+        config->setStageGrpcEndpoint(m_stageEndpointEdit->text().trimmed());
+    }
 
     QString serialPortValue = m_serialPortCombo->currentData().toString().trimmed();
     if (serialPortValue.isEmpty()) {
