@@ -29,7 +29,8 @@ public:
 public slots:
     void onDataUpdated(const QVector<FrameData>& frames) override;
     void onCriticalFrame(const FrameData& frame) override;
-    
+    void onPlotSnapshotUpdated(const QSharedPointer<const PlotSnapshot>& snapshot) override;
+
     // 用户交互槽
     void onGridWidthChanged(int width);
     void onGridHeightChanged(int height);

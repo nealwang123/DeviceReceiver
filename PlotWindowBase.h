@@ -4,6 +4,7 @@
 #include <QWidget>
 #include <QVector>
 #include "FrameData.h"
+#include "PlotDataHub.h"
 
 class PlotWindowBase : public QWidget
 {
@@ -15,6 +16,7 @@ public:
 public slots:
     virtual void onDataUpdated(const QVector<FrameData>& frames) = 0;
     virtual void onCriticalFrame(const FrameData& frame) = 0;
+    virtual void onPlotSnapshotUpdated(const QSharedPointer<const PlotSnapshot>& snapshot) = 0;
 };
 
 #endif // PLOTWINDOWBASE_H

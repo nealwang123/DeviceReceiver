@@ -1,9 +1,10 @@
-﻿#include "PlotWindowManager.h"
+#include "PlotWindowManager.h"
 #include "PlotWindow.h"
 #include "HeatMapPlotWindow.h"
 #include "ArrayPlotWindow.h"
 #include "DataCacheManager.h"
 #include "AppConfig.h"
+#include "PlotDataHub.h"
 #include <QMdiArea>
 #include <QMdiSubWindow>
 #include <QPointer>
@@ -56,6 +57,9 @@ void PlotWindowManager::initialize()
     m_baseUpdateIntervalMs = intervalMs;
     m_updateTimer->setInterval(intervalMs);
     connect(m_updateTimer, &QTimer::timeout, this, &PlotWindowManager::onUpdateTimer);
+    if (AppConfig* config = AppConfig::instance()) {
+        PlotDataHub::instance()->setMaxPoints(config->maxPlotPoints());
+    }
 
     // 连接DataCacheManager的报警信号
     DataCacheManager* cacheManager = DataCacheManager::instance();
@@ -81,6 +85,7 @@ void PlotWindowManager::cleanup()
     }
 
     m_lastDispatchedTimestamp = 0;
+    PlotDataHub::instance()->reset();
     
     m_isInitialized = false;
 }
@@ -195,6 +200,8 @@ void PlotWindowManager::registerWindow(PlotWindow* window)
     // 连接数据更新信号
     connect(this, &PlotWindowManager::dataUpdated,
             window, &PlotWindow::onDataUpdated);
+    connect(this, &PlotWindowManager::plotSnapshotUpdated,
+            window, &PlotWindow::onPlotSnapshotUpdated);
     
     // 连接报警信号
     connect(this, &PlotWindowManager::criticalFrameReceived,
@@ -215,6 +222,8 @@ void PlotWindowManager::unregisterWindow(PlotWindow* window)
     // 断开信号连接
     disconnect(this, &PlotWindowManager::dataUpdated,
                window, &PlotWindow::onDataUpdated);
+    disconnect(this, &PlotWindowManager::plotSnapshotUpdated,
+               window, &PlotWindow::onPlotSnapshotUpdated);
     disconnect(this, &PlotWindowManager::criticalFrameReceived,
                window, &PlotWindow::onCriticalFrame);
 
@@ -231,6 +240,7 @@ void PlotWindowManager::updateAllWindows()
     QVector<FrameData> frames = getRecentFrames(5);
     if (!frames.isEmpty()) {
         emit dataUpdated(frames);
+        emit plotSnapshotUpdated(PlotDataHub::instance()->appendFrames(frames));
     }
 }
 
@@ -309,8 +319,9 @@ void PlotWindowManager::onUpdateTimer()
 
     m_lastDispatchedTimestamp = maxTimestamp;
 
-    // 分发数据给所有注册的窗口
+    // 分发共享快照给所有注册窗口（保留旧信号用于兼容占位窗口）
     emit dataUpdated(incrementalFrames);
+    emit plotSnapshotUpdated(PlotDataHub::instance()->appendFrames(incrementalFrames));
     
     // 性能监控：如果窗口过多，可以适当降低更新频率
     if (m_windows.size() > 5) {

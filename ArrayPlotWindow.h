@@ -19,6 +19,7 @@ public:
 public slots:
     void onDataUpdated(const QVector<FrameData>& frames) override;
     void onCriticalFrame(const FrameData& frame) override;
+    void onPlotSnapshotUpdated(const QSharedPointer<const PlotSnapshot>& snapshot) override;
 
 private:
     void initArrayPlot();
@@ -43,6 +44,7 @@ private:
     double m_latestTime{0.0};
     int m_axisUpdateCounter{0};
     int m_axisUpdateStride{10};
+    quint64 m_lastSnapshotVersion{0};
 };
 
 #endif // ARRAYPLOTWINDOW_H

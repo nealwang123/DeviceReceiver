@@ -1,4 +1,5 @@
-﻿#include "PlotWindow.h"
+#include "PlotWindow.h"
+#include "PlotDataHub.h"
 #include "AppConfig.h"
 #include <QVBoxLayout>
 #include <QHBoxLayout>
@@ -125,156 +126,99 @@ void PlotWindow::initPlot()
 
 void PlotWindow::onDataUpdated(const QVector<FrameData>& frames)
 {
-    if (frames.isEmpty()) {
-        return;
-    }
-    updatePlotData(frames);
+    Q_UNUSED(frames);
 }
 
-void PlotWindow::updatePlotData(const QVector<FrameData>& frames)
+void PlotWindow::onPlotSnapshotUpdated(const QSharedPointer<const PlotSnapshot>& snapshot)
 {
-    if (!m_plot || frames.isEmpty()) return;
+    if (!snapshot || snapshot->version == m_lastSnapshotVersion) {
+        return;
+    }
+    m_lastSnapshotVersion = snapshot->version;
+    updatePlotDataFromSnapshot(snapshot);
+}
 
-    bool needReplot = false;
+void PlotWindow::updatePlotDataFromSnapshot(const QSharedPointer<const PlotSnapshot>& snapshot)
+{
+    if (!m_plot || !snapshot || snapshot->timeMs.isEmpty()) {
+        return;
+    }
 
-    for (const auto& frame : frames) {
-        if (frame.detectMode == FrameData::Legacy) {
-            if (m_viewTypeCombo) m_viewTypeCombo->setVisible(false);
+    const FrameData::DetectionMode mode = snapshot->mode;
+    const int ch = snapshot->channelCount;
+    if (mode == FrameData::Legacy || ch <= 0) {
+        return;
+    }
 
-        } else if (frame.detectMode == FrameData::MultiChannelReal) {
-            // 模式切换：complex -> real，需重建布局
-            if (m_lastMode == FrameData::MultiChannelComplex) {
-                m_axisRects.clear();
-                if (m_plot->plotLayout()) {
-                    m_plot->plotLayout()->clear();
-                    m_plot->clearGraphs();
-                    m_plot->plotLayout()->addElement(0, 0, new QCPAxisRect(m_plot));
-                    initPlot();
-                }
-                m_currentChannelCount = 0;
-                m_xTime.clear();
-                m_channelData.clear();
-                m_channelData2.clear();
-                if (m_viewTypeCombo) m_viewTypeCombo->setVisible(false);
-            }
-
-            if (m_plot && m_plot->yAxis) {
-                m_plot->yAxis->setLabel("幅值");
-            }
-
-            int ch = qBound(0, static_cast<int>(frame.channelCount), 200);
-
-            // 通道数变化时重建 graph
-            if (m_currentChannelCount != ch) {
-                m_currentChannelCount = ch;
-                m_xTime.clear();
-                m_xTime.reserve(m_baseMaxPlotPoints + 16);
-                m_channelData.clear();
-                m_channelData.resize(ch);
-                for (auto &vec : m_channelData) {
-                    vec.reserve(m_baseMaxPlotPoints + 16);
-                }
+    if (mode == FrameData::MultiChannelReal) {
+        if (m_lastMode == FrameData::MultiChannelComplex) {
+            m_axisRects.clear();
+            if (m_plot->plotLayout()) {
+                m_plot->plotLayout()->clear();
                 m_plot->clearGraphs();
-                for (int i = 0; i < ch; ++i) {
-                    QCPGraph* g = m_plot->addGraph();
-                    QColor color = QColor::fromHsv((i * 36) % 360, 200, 200);
-                    g->setPen(QPen(color, 1));
-                    g->setSmooth(0);
-                    g->setName(QString("Ch%1(Amp)").arg(i + 1));
-                }
+                m_plot->plotLayout()->addElement(0, 0, new QCPAxisRect(m_plot));
+                initPlot();
             }
-
-            // 增量追加到本地向量（不触碰 graph 内部数据）
-            double t = static_cast<double>(frame.timestamp);
-            m_xTime.append(t);
-            for (int i = 0; i < ch && i < m_channelData.size(); ++i) {
-                double v = (i < frame.channels_comp0.size())
-                               ? frame.channels_comp0.at(i)
-                               : qQNaN();
-                m_channelData[i].append(v);
-            }
-            needReplot = true;
-
-        } else if (frame.detectMode == FrameData::MultiChannelComplex) {
-            int ch = qBound(0, static_cast<int>(frame.channelCount), 200);
-
-            if (m_lastMode != frame.detectMode || m_currentChannelCount != ch) {
-                m_xTime.clear();
-                m_xTime.reserve(m_baseMaxPlotPoints + 16);
-                m_currentChannelCount = ch;
-                setupComplexLayout(ch);
-                if (m_viewTypeCombo) m_viewTypeCombo->setVisible(true);
-            }
-
-            double t = static_cast<double>(frame.timestamp);
+        }
+        if (m_plot && m_plot->yAxis) {
+            m_plot->yAxis->setLabel("幅值");
+        }
+        if (m_currentChannelCount != ch) {
+            m_currentChannelCount = ch;
+            m_plot->clearGraphs();
             for (int i = 0; i < ch; ++i) {
-                double re = (i < frame.channels_comp0.size()) ? frame.channels_comp0.at(i) : qQNaN();
-                double im = (i < frame.channels_comp1.size()) ? frame.channels_comp1.at(i) : qQNaN();
-                double topVal, bottomVal;
-                if (m_complexViewType == RealImag) {
-                    topVal = re; bottomVal = im;
-                } else {
-                    topVal = std::hypot(re, im); bottomVal = std::atan2(im, re);
-                }
-                if (i < m_channelData.size())  m_channelData[i].append(topVal);
-                if (i < m_channelData2.size()) m_channelData2[i].append(bottomVal);
+                QCPGraph* g = m_plot->addGraph();
+                QColor color = QColor::fromHsv((i * 36) % 360, 200, 200);
+                g->setPen(QPen(color, 1));
+                g->setSmooth(0);
+                g->setName(QString("Ch%1(Amp)").arg(i + 1));
             }
-            m_xTime.append(t);
-            needReplot = true;
+        }
+        if (m_viewTypeCombo) {
+            m_viewTypeCombo->setVisible(false);
+        }
+        for (int i = 0; i < ch && i < m_plot->graphCount() && i < snapshot->realAmp.size(); ++i) {
+            m_plot->graph(i)->setData(snapshot->timeMs, snapshot->realAmp[i], true);
+        }
+    } else if (mode == FrameData::MultiChannelComplex) {
+        if (m_lastMode != mode || m_currentChannelCount != ch) {
+            m_currentChannelCount = ch;
+            setupComplexLayout(ch);
+        }
+        if (m_viewTypeCombo) {
+            m_viewTypeCombo->setVisible(true);
         }
 
-        m_lastMode = frame.detectMode;
-    }
+        const QVector<QVector<double>>& top =
+            (m_complexViewType == RealImag) ? snapshot->complexReal : snapshot->complexMag;
+        const QVector<QVector<double>>& bottom =
+            (m_complexViewType == RealImag) ? snapshot->complexImag : snapshot->complexPhase;
 
-    if (!needReplot) return;
-
-    // ── 裁剪旧数据（纯向量操作）──────────────────────────────
-    const int maxPlotPoints = effectiveMaxPlotPoints();
-    if (m_xTime.size() > maxPlotPoints) {
-        const int excess = m_xTime.size() - maxPlotPoints;
-        m_xTime.remove(0, excess);
-        for (auto &vec : m_channelData) {
-            if (vec.size() > maxPlotPoints) vec.remove(0, vec.size() - maxPlotPoints);
-        }
-        for (auto &vec : m_channelData2) {
-            if (vec.size() > maxPlotPoints) vec.remove(0, vec.size() - maxPlotPoints);
-        }
-    }
-
-    // ── 批量 setData 覆盖（避免逐点 addData 的内存分配开销）──
-    if (m_lastMode == FrameData::MultiChannelReal) {
-        for (int i = 0; i < m_currentChannelCount && i < m_plot->graphCount(); ++i) {
-            if (i < m_channelData.size())
-                m_plot->graph(i)->setData(m_xTime, m_channelData[i], true);
-        }
-    } else if (m_lastMode == FrameData::MultiChannelComplex) {
-        const int ch = m_currentChannelCount;
-        for (int i = 0; i < ch && i < m_plot->graphCount(); ++i) {
-            if (i < m_channelData.size())
-                m_plot->graph(i)->setData(m_xTime, m_channelData[i], true);
+        for (int i = 0; i < ch && i < m_plot->graphCount() && i < top.size(); ++i) {
+            m_plot->graph(i)->setData(snapshot->timeMs, top[i], true);
         }
         for (int i = 0; i < ch; ++i) {
             const int bottomIdx = ch + i;
-            if (bottomIdx < m_plot->graphCount() && i < m_channelData2.size())
-                m_plot->graph(bottomIdx)->setData(m_xTime, m_channelData2[i], true);
-        }
-    }
-
-    // ── 更新坐标轴范围 ───────────────────────────────────────
-    if (!m_xTime.isEmpty()) {
-        double latestTime = m_xTime.last();
-        if (m_lastMode == FrameData::MultiChannelComplex) {
-            for (auto rect : m_axisRects) {
-                if (rect && rect->axis(QCPAxis::atBottom))
-                    rect->axis(QCPAxis::atBottom)->setRange(latestTime - 10000, latestTime);
+            if (bottomIdx < m_plot->graphCount() && i < bottom.size()) {
+                m_plot->graph(bottomIdx)->setData(snapshot->timeMs, bottom[i], true);
             }
-        } else {
-            if (m_plot->xAxis)
-                m_plot->xAxis->setRange(latestTime - 10000, latestTime);
         }
     }
 
-    // 排队重绘，避免在同一事件循环内多次渲染
+    const double latestTime = snapshot->timeMs.last();
+    if (mode == FrameData::MultiChannelComplex) {
+        for (auto rect : m_axisRects) {
+            if (rect && rect->axis(QCPAxis::atBottom)) {
+                rect->axis(QCPAxis::atBottom)->setRange(latestTime - 10000, latestTime);
+            }
+        }
+    } else {
+        if (m_plot->xAxis) {
+            m_plot->xAxis->setRange(latestTime - 10000, latestTime);
+        }
+    }
+
+    m_lastMode = mode;
     m_plot->replot(QCustomPlot::rpQueuedReplot);
 }
 
@@ -376,21 +320,6 @@ void PlotWindow::setupComplexLayout(int channelCount)
         m_complexTopLegend = topLegend;
         qDebug() << "[setupComplexLayout] 图例配置完成";
 
-        // ensure channel data containers have proper size
-        qDebug() << "[setupComplexLayout] 调整数据容器大小...";
-        m_channelData.clear();
-        m_channelData.resize(channelCount);
-        m_channelData2.clear();
-        m_channelData2.resize(channelCount);
-        // 预分配每通道数据以避免反复重分配
-        for (auto &vec : m_channelData) {
-            vec.reserve(m_baseMaxPlotPoints);
-        }
-        for (auto &vec : m_channelData2) {
-            vec.reserve(m_baseMaxPlotPoints);
-        }
-        qDebug() << "[setupComplexLayout] 数据容器已调整，大小=" << channelCount;
-        
         qDebug() << "[setupComplexLayout] 完成";
     } catch (const std::exception& e) {
         qCritical() << "[setupComplexLayout] 异常:" << e.what();
@@ -402,13 +331,11 @@ void PlotWindow::setupComplexLayout(int channelCount)
 void PlotWindow::onViewTypeChanged(int index)
 {
     m_complexViewType = static_cast<ComplexViewType>(index);
-    // 清空所有 graph 数据，以便下一次 updatePlotData 用新变换重新填充
-    m_xTime.clear();
-    for (int i = 0; i < m_plot->graphCount(); ++i)
-        m_plot->graph(i)->data()->clear();
-    m_channelData.clear();
-    m_channelData2.clear();
-    m_plot->replot(QCustomPlot::rpQueuedReplot);
+    const auto snap = PlotDataHub::instance()->snapshot();
+    if (!snap) {
+        return;
+    }
+    updatePlotDataFromSnapshot(snap);
 }
 
 void PlotWindow::onLegendClick(QCPLegend* legend, QCPAbstractLegendItem* item, QMouseEvent* event)

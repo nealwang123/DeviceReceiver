@@ -454,3 +454,8 @@ void HeatMapPlotWindow::onCriticalFrame(const FrameData& frame)
     m_statsLabel->setText(alarmMsg);
 }
 
+void HeatMapPlotWindow::onPlotSnapshotUpdated(const QSharedPointer<const PlotSnapshot>& snapshot)
+{
+    Q_UNUSED(snapshot);
+}
+

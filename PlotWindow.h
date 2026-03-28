@@ -1,4 +1,4 @@
-﻿#ifndef PLOTWINDOW_H
+#ifndef PLOTWINDOW_H
 #define PLOTWINDOW_H
 
 #include <QTimer>
@@ -21,6 +21,7 @@ public slots:
      * @param frames 最新的数据帧
      */
     void onDataUpdated(const QVector<FrameData>& frames) override;
+    void onPlotSnapshotUpdated(const QSharedPointer<const PlotSnapshot>& snapshot) override;
     
     /**
      * @brief 处理报警帧
@@ -30,7 +31,7 @@ public slots:
 
 private:
     void initPlot();                // 初始化绘图配置
-    void updatePlotData(const QVector<FrameData>& frames); // 更新绘图数据
+    void updatePlotDataFromSnapshot(const QSharedPointer<const PlotSnapshot>& snapshot);
     int effectiveMaxPlotPoints() const;
 
     // 辅助布局
@@ -45,11 +46,6 @@ private:
     QCustomPlot* m_plot;
     QTimer* m_refreshTimer;         // 保留定时器用于平滑动画（可选）
     
-    // 本地绘图缓存
-    QVector<double> m_xTime;        // 时间轴
-    // 多通道数据缓存
-    QVector<QVector<double>> m_channelData; // 每通道的 y 数据（多通道模式）
-    QVector<QVector<double>> m_channelData2; // 复杂模式底部图的数据
     int m_currentChannelCount = 0;
     int m_baseMaxPlotPoints = 1000;  // 基础最大绘图点数
 
@@ -68,6 +64,7 @@ private:
 
     // 上一个检测模式，用于重建布局
     FrameData::DetectionMode m_lastMode = FrameData::Legacy;
+    quint64 m_lastSnapshotVersion = 0;
 };
 
 #endif // PLOTWINDOW_H

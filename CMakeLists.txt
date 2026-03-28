@@ -73,6 +73,7 @@ set(SOURCE_FILES
     DataProcessor.cpp
     ApplicationController.cpp
     AppConfig.cpp
+    PlotDataHub.cpp
     PlotWindowManager.cpp
     MainWindow.cpp
 )
@@ -94,6 +95,7 @@ set(HEADER_FILES
     DataProcessor.h
     ApplicationController.h
     AppConfig.h
+    PlotDataHub.h
     PlotWindowManager.h
     MainWindow.h
 )

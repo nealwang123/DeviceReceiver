@@ -1,4 +1,4 @@
-﻿#ifndef PLOTWINDOWMANAGER_H
+#ifndef PLOTWINDOWMANAGER_H
 #define PLOTWINDOWMANAGER_H
 
 #include <QObject>
@@ -6,6 +6,7 @@
 #include <QTimer>
 #include <QList>
 #include "FrameData.h"
+#include "PlotDataHub.h"
 
 // 前置声明
 class PlotWindow;
@@ -123,6 +124,7 @@ signals:
      * @param frames 最新的数据帧
      */
     void dataUpdated(const QVector<FrameData>& frames);
+    void plotSnapshotUpdated(const QSharedPointer<const PlotSnapshot>& snapshot);
 
     /**
      * @brief 窗口被添加信号

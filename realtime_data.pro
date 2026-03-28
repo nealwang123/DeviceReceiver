@@ -232,6 +232,7 @@ SOURCES += main.cpp \
            DataProcessor.cpp \
            ApplicationController.cpp \
            AppConfig.cpp \
+           PlotDataHub.cpp \
            PlotWindowManager.cpp \
            MainWindow.cpp
 
@@ -251,6 +252,7 @@ HEADERS += FrameData.h \
            DataProcessor.h \
            ApplicationController.h \
            AppConfig.h \
+           PlotDataHub.h \
            PlotWindowManager.h \
            MainWindow.h
 

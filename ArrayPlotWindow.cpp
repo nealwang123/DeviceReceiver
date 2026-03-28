@@ -206,72 +206,45 @@ void ArrayPlotWindow::updateArrayData()
 
 void ArrayPlotWindow::onDataUpdated(const QVector<FrameData>& frames)
 {
-    if (frames.isEmpty() || m_useMockData) return;
-    
-    for (const FrameData& frame : frames) {
-        // 检查模式变化
-        if (frame.detectMode != m_lastMode || frame.channelCount != m_currentChannelCount) {
-            // 模式或通道数变化，需要重建布局
-            m_lastMode = frame.detectMode;
-            m_currentChannelCount = qBound(1, static_cast<int>(frame.channelCount), 200);
-            
-            // 清空现有数据
-            m_timeAxis.clear();
-            m_channelValues.clear();
-            m_channelValues2.clear();
-            m_latestTime = 0.0;
-            m_axisUpdateCounter = 0;
-            
-            // 重新初始化绘图
-            initArrayPlot();
-        }
-        
-        const double t = (frame.timestamp > 0)
-            ? static_cast<double>(frame.timestamp)
-            : (m_timeAxis.isEmpty() ? 0.0 : m_timeAxis.last() + 0.1);
-        m_timeAxis.append(t);
-        m_latestTime = t;
-        
-        // 根据模式处理数据
-        if (frame.detectMode == FrameData::MultiChannelReal) {
-            // 幅值/相位模式（阵列图当前展示 comp0 幅值分量）
-            for (int ch = 0; ch < m_currentChannelCount; ch++) {
-                double val = (ch < frame.channels_comp0.size()) ? frame.channels_comp0.at(ch) : qQNaN();
-                if (ch < m_plot->graphCount()) {
-                    QCPGraph* graph = m_plot->graph(ch);
-                    graph->addData(t, val);
-                    if ((m_axisUpdateCounter % m_axisUpdateStride) == 0) {
-                        graph->rescaleValueAxis(false);
-                    }
-                }
-            }
-        } else if (frame.detectMode == FrameData::MultiChannelComplex) {
-            // 复数模式
-            for (int ch = 0; ch < m_currentChannelCount; ch++) {
-                double re = (ch < frame.channels_comp0.size()) ? frame.channels_comp0.at(ch) : qQNaN();
-                if (ch < m_plot->graphCount()) {
-                    QCPGraph* graph = m_plot->graph(ch);
-                    graph->addData(t, re);
-                    if ((m_axisUpdateCounter % m_axisUpdateStride) == 0) {
-                        graph->rescaleValueAxis(false);
-                    }
-                }
-            }
-        }
-        
-        // 如果数据超过最大点数，按时间裁剪
-        if (m_timeAxis.size() > m_maxDataPoints) {
-            const int removeCount = m_timeAxis.size() - m_maxDataPoints;
-            const double cutoffKey = m_timeAxis.at(removeCount);
-            m_timeAxis.remove(0, removeCount);
-            for (int i = 0; i < m_plot->graphCount(); ++i) {
-                m_plot->graph(i)->data()->removeBefore(cutoffKey);
-            }
-        }
+    Q_UNUSED(frames);
+}
 
-        ++m_axisUpdateCounter;
+void ArrayPlotWindow::onPlotSnapshotUpdated(const QSharedPointer<const PlotSnapshot>& snapshot)
+{
+    if (m_useMockData || !snapshot || snapshot->version == m_lastSnapshotVersion || !m_plot) {
+        return;
     }
-    
+    m_lastSnapshotVersion = snapshot->version;
+
+    const FrameData::DetectionMode mode = snapshot->mode;
+    const int ch = qBound(1, snapshot->channelCount, 200);
+    if (mode == FrameData::Legacy || ch <= 0 || snapshot->timeMs.isEmpty()) {
+        return;
+    }
+
+    if (mode != m_lastMode || ch != m_currentChannelCount) {
+        m_lastMode = mode;
+        m_currentChannelCount = ch;
+        initArrayPlot();
+    }
+
+    const QVector<QVector<double>>* source = nullptr;
+    if (mode == FrameData::MultiChannelReal) {
+        source = &snapshot->realAmp;
+    } else if (mode == FrameData::MultiChannelComplex) {
+        // 阵列图统一展示幅值，避免只看实部导致判读偏差。
+        source = &snapshot->complexMag;
+    }
+    if (!source) {
+        return;
+    }
+
+    for (int i = 0; i < ch && i < m_plot->graphCount() && i < source->size(); ++i) {
+        m_plot->graph(i)->setData(snapshot->timeMs, source->at(i), true);
+    }
+
+    m_timeAxis = snapshot->timeMs;
+    m_latestTime = m_timeAxis.last();
     updateArrayData();
 }
 
