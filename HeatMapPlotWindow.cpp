@@ -4,19 +4,45 @@
 #include <QHBoxLayout>
 #include <QGroupBox>
 #include <QFormLayout>
+#include <QWidget>
 #include <QFileDialog>
 #include <QDebug>
+#include <QtGlobal>
 #include <cmath>
 #include <algorithm>
+#include <utility>
+
+namespace {
+// grpc_test_server.py 默认 --mode complex：通道0 为 hypot(re,im)，模长多在约 0.65~1.35；色标略宽于理论值以便 jet 色谱分层。
+// gRPC 帧率由应用配置 Receiver/MockDataIntervalMs 传入 Subscribe（默认 100ms，勿误设 1000）。
+// 若使用 --mode real，comp0 幅值约 6~12，请在「强度色标」中改为约 5~12。
+static bool minMaxFinite(const QVector<double>& data, double* minV, double* maxV)
+{
+    bool any = false;
+    for (double v : data) {
+        if (!std::isfinite(v)) {
+            continue;
+        }
+        if (!any) {
+            *minV = *maxV = v;
+            any = true;
+        } else {
+            *minV = std::min(*minV, v);
+            *maxV = std::max(*maxV, v);
+        }
+    }
+    return any;
+}
+} // namespace
 
 HeatMapPlotWindow::HeatMapPlotWindow(QWidget *parent)
     : PlotWindow(parent)
-    , m_gridWidth(1024)
-    , m_gridHeight(128)
+    , m_gridWidth(101)
+    , m_gridHeight(101)
     , m_dataMin(0.0)
     , m_dataMax(100.0)
-    , m_displayMin(0.0)
-    , m_displayMax(100.0)
+    , m_displayMin(0.55)
+    , m_displayMax(1.45)
 {
     setWindowTitle("热力图");
     resize(1200, 600);
@@ -48,38 +74,80 @@ HeatMapPlotWindow::HeatMapPlotWindow(QWidget *parent)
     QFormLayout* sizeLayout = new QFormLayout(sizeGroup);
     
     m_widthSpinBox = new QSpinBox(this);
-    m_widthSpinBox->setMinimum(64);
+    m_widthSpinBox->setMinimum(32);
     m_widthSpinBox->setMaximum(2048);
-    m_widthSpinBox->setValue(1024);
-    m_widthSpinBox->setSingleStep(128);
+    m_widthSpinBox->setValue(101);
+    m_widthSpinBox->setSingleStep(1);
     
     m_heightSpinBox = new QSpinBox(this);
     m_heightSpinBox->setMinimum(32);
     m_heightSpinBox->setMaximum(512);
-    m_heightSpinBox->setValue(128);
-    m_heightSpinBox->setSingleStep(16);
+    m_heightSpinBox->setValue(101);
+    m_heightSpinBox->setSingleStep(1);
     
     sizeLayout->addRow("宽度:", m_widthSpinBox);
     sizeLayout->addRow("高度:", m_heightSpinBox);
     
     // 数据范围控制
-    QGroupBox* rangeGroup = new QGroupBox("数据范围", this);
+    QGroupBox* rangeGroup = new QGroupBox("强度色标 (通道0，complex 模长常用 0.55~1.45)", this);
     QFormLayout* rangeLayout = new QFormLayout(rangeGroup);
     
     m_minSpinBox = new QDoubleSpinBox(this);
     m_minSpinBox->setMinimum(-1000.0);
-    m_minSpinBox->setMaximum(1000.0);
-    m_minSpinBox->setValue(0.0);
-    m_minSpinBox->setSingleStep(1.0);
+    m_minSpinBox->setMaximum(10000.0);
+    m_minSpinBox->setDecimals(3);
+    m_minSpinBox->setValue(0.55);
+    m_minSpinBox->setSingleStep(0.05);
     
     m_maxSpinBox = new QDoubleSpinBox(this);
     m_maxSpinBox->setMinimum(-1000.0);
-    m_maxSpinBox->setMaximum(1000.0);
-    m_maxSpinBox->setValue(100.0);
-    m_maxSpinBox->setSingleStep(1.0);
+    m_maxSpinBox->setMaximum(10000.0);
+    m_maxSpinBox->setDecimals(3);
+    m_maxSpinBox->setValue(1.45);
+    m_maxSpinBox->setSingleStep(0.05);
     
     rangeLayout->addRow("最小值:", m_minSpinBox);
     rangeLayout->addRow("最大值:", m_maxSpinBox);
+
+    QGroupBox* stageGroup = new QGroupBox("台位范围 (mm)", this);
+    QFormLayout* stageLayout = new QFormLayout(stageGroup);
+    m_autoStageRangeCheck = new QCheckBox("自动扩展 XY 范围", this);
+    m_autoStageRangeCheck->setChecked(false);
+    m_stageXMinSpin = new QDoubleSpinBox(this);
+    m_stageXMinSpin->setRange(-1e6, 1e6);
+    m_stageXMinSpin->setDecimals(3);
+    m_stageXMinSpin->setValue(0.0);
+    m_stageXMaxSpin = new QDoubleSpinBox(this);
+    m_stageXMaxSpin->setRange(-1e6, 1e6);
+    m_stageXMaxSpin->setDecimals(3);
+    m_stageXMaxSpin->setValue(1000.0);
+    m_stageYMinSpin = new QDoubleSpinBox(this);
+    m_stageYMinSpin->setRange(-1e6, 1e6);
+    m_stageYMinSpin->setDecimals(3);
+    m_stageYMinSpin->setValue(0.0);
+    m_stageYMaxSpin = new QDoubleSpinBox(this);
+    m_stageYMaxSpin->setRange(-1e6, 1e6);
+    m_stageYMaxSpin->setDecimals(3);
+    m_stageYMaxSpin->setValue(1000.0);
+    QWidget* xRangeRow = new QWidget(this);
+    QHBoxLayout* xRangeLayout = new QHBoxLayout(xRangeRow);
+    xRangeLayout->setContentsMargins(0, 0, 0, 0);
+    xRangeLayout->addWidget(m_stageXMinSpin);
+    xRangeLayout->addWidget(m_stageXMaxSpin);
+    QWidget* yRangeRow = new QWidget(this);
+    QHBoxLayout* yRangeLayout = new QHBoxLayout(yRangeRow);
+    yRangeLayout->setContentsMargins(0, 0, 0, 0);
+    yRangeLayout->addWidget(m_stageYMinSpin);
+    yRangeLayout->addWidget(m_stageYMaxSpin);
+    stageLayout->addRow(m_autoStageRangeCheck);
+    stageLayout->addRow("X 范围 (mm):", xRangeRow);
+    stageLayout->addRow("Y 范围 (mm):", yRangeRow);
+    m_clearHeatMapButton = new QPushButton("清除热力图", this);
+    stageLayout->addRow(m_clearHeatMapButton);
+    m_stageXMinSpin->setEnabled(true);
+    m_stageXMaxSpin->setEnabled(true);
+    m_stageYMinSpin->setEnabled(true);
+    m_stageYMaxSpin->setEnabled(true);
     
     // 动作按钮
     m_startButton = new QPushButton("启动模拟", this);
@@ -90,6 +158,7 @@ HeatMapPlotWindow::HeatMapPlotWindow(QWidget *parent)
     
     controlLayout->addWidget(sizeGroup);
     controlLayout->addWidget(rangeGroup);
+    controlLayout->addWidget(stageGroup);
     controlLayout->addWidget(m_startButton);
     controlLayout->addWidget(m_stopButton);
     controlLayout->addWidget(m_exportButton);
@@ -131,6 +200,24 @@ HeatMapPlotWindow::HeatMapPlotWindow(QWidget *parent)
     connect(m_startButton, &QPushButton::clicked, this, &HeatMapPlotWindow::onStartMockDataClicked);
     connect(m_stopButton, &QPushButton::clicked, this, &HeatMapPlotWindow::onStopMockDataClicked);
     connect(m_exportButton, &QPushButton::clicked, this, &HeatMapPlotWindow::onExportClicked);
+    connect(m_autoStageRangeCheck, &QCheckBox::toggled, this, &HeatMapPlotWindow::onAutoStageRangeToggled);
+    connect(m_stageXMinSpin, QOverload<double>::of(&QDoubleSpinBox::valueChanged),
+            this, &HeatMapPlotWindow::onStageRangeSpinChanged);
+    connect(m_stageXMaxSpin, QOverload<double>::of(&QDoubleSpinBox::valueChanged),
+            this, &HeatMapPlotWindow::onStageRangeSpinChanged);
+    connect(m_stageYMinSpin, QOverload<double>::of(&QDoubleSpinBox::valueChanged),
+            this, &HeatMapPlotWindow::onStageRangeSpinChanged);
+    connect(m_stageYMaxSpin, QOverload<double>::of(&QDoubleSpinBox::valueChanged),
+            this, &HeatMapPlotWindow::onStageRangeSpinChanged);
+    connect(m_clearHeatMapButton, &QPushButton::clicked, this, &HeatMapPlotWindow::onClearHeatMapClicked);
+
+    m_replotCoalesceTimer = new QTimer(this);
+    m_replotCoalesceTimer->setSingleShot(true);
+    connect(m_replotCoalesceTimer, &QTimer::timeout, this, [this]() {
+        m_replotThrottle.restart();
+        refreshLiveHeatMapPlot();
+    });
+    m_replotThrottle.start();
 
     // 定时器用于更新模拟数据
     m_mockDataTimer = new QTimer(this);
@@ -181,22 +268,23 @@ void HeatMapPlotWindow::initHeatMap()
     setColorGradient();
     
     // 配置轴
-    m_plot->xAxis->setLabel("X 坐标");
-    m_plot->yAxis->setLabel("Y 坐标");
+    m_plot->xAxis->setLabel("网格 X");
+    m_plot->yAxis->setLabel("网格 Y");
     m_plot->xAxis->setRange(0, m_gridWidth);
     m_plot->yAxis->setRange(0, m_gridHeight);
     m_plot->xAxis->setNumberFormat("f");
     m_plot->yAxis->setNumberFormat("f");
+    m_plot->xAxis->setNumberPrecision(1);
+    m_plot->yAxis->setNumberPrecision(1);
     
     // 配置颜色标尺
     m_colorScale->setLabel("信号强度");
     m_colorScale->axis()->setLabel("强度");
     
-    // 初始化网格数据到 QCPColorMap
-    // 填充初始数据（所有值为 50）
+    const double fillVal = m_useMockData ? 50.0 : m_displayMin;
     for (int x = 0; x < m_gridWidth; ++x) {
         for (int y = 0; y < m_gridHeight; ++y) {
-            m_colorMap->data()->setCell(x, y, 50.0);
+            m_colorMap->data()->setCell(x, y, fillVal);
         }
     }
     
@@ -207,19 +295,9 @@ void HeatMapPlotWindow::setColorGradient()
 {
     if (!m_colorMap) return;
 
-    // 定义颜色梯度：浅黄→深橙→红
+    // jet：蓝→青→绿→黄→红，幅值分层优于黄-红单色带（与固定窄色标配合）
     QCPColorGradient gradient;
-    gradient.clearColorStops();
-    
-    // 浅黄 (#FFFCB0)
-    gradient.setColorStopAt(0.0, QColor(255, 252, 176));
-    // 橙色 (#FFA500)
-    gradient.setColorStopAt(0.5, QColor(255, 165, 0));
-    // 深橙 (#FF8C00)
-    gradient.setColorStopAt(0.75, QColor(255, 140, 0));
-    // 红色 (#FF0000)
-    gradient.setColorStopAt(1.0, QColor(255, 0, 0));
-    
+    gradient.loadPreset(QCPColorGradient::gpJet);
     m_colorMap->setGradient(gradient);
 }
 
@@ -234,27 +312,39 @@ void HeatMapPlotWindow::updateHeatMapDisplay()
         return;
     }
 
-    // 计算实际数据范围
-    double minVal = *std::min_element(m_gridData.begin(), m_gridData.end());
-    double maxVal = *std::max_element(m_gridData.begin(), m_gridData.end());
-    
-    // 确保有足够的范围差异以显示颜色梯度
-    if (std::fabs(maxVal - minVal) < 0.01) {
-        minVal -= 2.0;
-        maxVal += 2.0;
+    double gridMin = 0.0;
+    double gridMax = 100.0;
+    if (!minMaxFinite(m_gridData, &gridMin, &gridMax)) {
+        m_colorMap->setDataRange(QCPRange(0, 100));
+        m_plot->replot();
+        return;
     }
+
+    double colorLo = gridMin;
+    double colorHi = gridMax;
+    if (m_useMockData) {
+        if (std::fabs(colorHi - colorLo) < 0.01) {
+            colorLo -= 2.0;
+            colorHi += 2.0;
+        }
+    } else {
+        colorLo = m_displayMin;
+        colorHi = m_displayMax;
+        if (std::fabs(colorHi - colorLo) < 1e-300) {
+            colorLo -= 1.0;
+            colorHi += 1.0;
+        }
+    }
+    m_colorMap->setDataRange(QCPRange(colorLo, colorHi));
     
-    // 设置数据范围（必须在更新数据前或后设置，但很关键）
-    m_colorMap->setDataRange(QCPRange(minVal, maxVal));
-    
-    // 逐个更新网格数据到 QCPColorMap
     for (int x = 0; x < m_gridWidth; ++x) {
         for (int y = 0; y < m_gridHeight; ++y) {
-            int idx = y * m_gridWidth + x;  // row-major order: y * width + x
+            int idx = y * m_gridWidth + x;
             if (idx >= 0 && idx < m_gridData.size()) {
                 double val = m_gridData.at(idx);
-                // 确保值在合理范围内
-                val = std::max(minVal - 10.0, std::min(maxVal + 10.0, val));
+                if (std::isfinite(val)) {
+                    val = std::max(colorLo - 10.0, std::min(colorHi + 10.0, val));
+                }
                 m_colorMap->data()->setCell(x, y, val);
             }
         }
@@ -262,18 +352,32 @@ void HeatMapPlotWindow::updateHeatMapDisplay()
 
     // 更新统计信息
     double avgVal = 0.0;
+    int finiteCount = 0;
     for (double val : m_gridData) {
-        avgVal += val;
+        if (std::isfinite(val)) {
+            avgVal += val;
+            ++finiteCount;
+        }
     }
-    avgVal /= m_gridData.size();
+    if (finiteCount > 0) {
+        avgVal /= static_cast<double>(finiteCount);
+    }
 
     m_statsLabel->setText(QString("网格: %1×%2 | 最小: %3 | 最大: %4 | 平均: %5 | 帧数: %6")
                          .arg(m_gridWidth)
                          .arg(m_gridHeight)
-                         .arg(minVal, 0, 'f', 2)
-                         .arg(maxVal, 0, 'f', 2)
+                         .arg(gridMin, 0, 'f', 2)
+                         .arg(gridMax, 0, 'f', 2)
                          .arg(avgVal, 0, 'f', 2)
                          .arg(m_frameCount));
+
+    if (m_useMockData) {
+        m_colorMap->data()->setRange(QCPRange(0, m_gridWidth), QCPRange(0, m_gridHeight));
+        m_plot->xAxis->setRange(0, m_gridWidth);
+        m_plot->yAxis->setRange(0, m_gridHeight);
+        m_plot->xAxis->setLabel("网格 X (索引)");
+        m_plot->yAxis->setLabel("网格 Y (索引)");
+    }
 
     // 重新绘制
     m_plot->replot();
@@ -323,12 +427,17 @@ void HeatMapPlotWindow::generateMockData()
 
 void HeatMapPlotWindow::setGridSize(int width, int height)
 {
-    if (width < 64 || height < 32) return;
+    if (width < 32 || height < 32) return;
     
     m_gridWidth = width;
     m_gridHeight = height;
     m_gridData.resize(m_gridWidth * m_gridHeight);
-    std::fill(m_gridData.begin(), m_gridData.end(), 50.0);
+    m_stageBoundsValid = false;
+    if (m_useMockData) {
+        std::fill(m_gridData.begin(), m_gridData.end(), 50.0);
+    } else {
+        m_gridData.fill(m_displayMin);
+    }
     
     initHeatMap();
     updateHeatMapDisplay();
@@ -349,11 +458,204 @@ void HeatMapPlotWindow::applyGrid(const QVector<double>& values, int width, int 
     updateHeatMapDisplay();
 }
 
+bool HeatMapPlotWindow::tryScalarValueForHeatmap(const FrameData& frame, double* out) const
+{
+    if (!out) {
+        return false;
+    }
+    if (frame.detectMode == FrameData::Legacy) {
+        return false;
+    }
+    if (frame.channelCount < 1 || frame.channels_comp0.isEmpty()) {
+        return false;
+    }
+    if (frame.detectMode == FrameData::MultiChannelReal) {
+        *out = frame.channels_comp0[0];
+        return true;
+    }
+    if (frame.detectMode == FrameData::MultiChannelComplex) {
+        if (frame.channels_comp1.size() < 1) {
+            return false;
+        }
+        *out = std::hypot(frame.channels_comp0[0], frame.channels_comp1[0]);
+        return true;
+    }
+    return false;
+}
+
+void HeatMapPlotWindow::updateStageBoundsFromPoint(double vx, double vy)
+{
+    if (!m_stageBoundsValid) {
+        m_stageXMinMm = m_stageXMaxMm = vx;
+        m_stageYMinMm = m_stageYMaxMm = vy;
+        m_stageBoundsValid = true;
+    } else {
+        m_stageXMinMm = std::min(m_stageXMinMm, vx);
+        m_stageXMaxMm = std::max(m_stageXMaxMm, vx);
+        m_stageYMinMm = std::min(m_stageYMinMm, vy);
+        m_stageYMaxMm = std::max(m_stageYMaxMm, vy);
+    }
+}
+
+void HeatMapPlotWindow::mapMmToCell(double vx, double vy, int* ix, int* iy) const
+{
+    double xmin = 0.0;
+    double xmax = 1.0;
+    double ymin = 0.0;
+    double ymax = 1.0;
+    if (m_autoStageRangeMm) {
+        xmin = m_stageXMinMm;
+        xmax = m_stageXMaxMm;
+        ymin = m_stageYMinMm;
+        ymax = m_stageYMaxMm;
+    } else {
+        xmin = m_stageXMinSpin->value();
+        xmax = m_stageXMaxSpin->value();
+        ymin = m_stageYMinSpin->value();
+        ymax = m_stageYMaxSpin->value();
+    }
+    const double sx = qMax(xmax - xmin, 1e-9);
+    const double sy = qMax(ymax - ymin, 1e-9);
+    const double tx = (vx - xmin) / sx;
+    const double ty = (vy - ymin) / sy;
+    *ix = qBound(0, static_cast<int>(std::floor(tx * static_cast<double>(m_gridWidth))), m_gridWidth - 1);
+    *iy = qBound(0, static_cast<int>(std::floor(ty * static_cast<double>(m_gridHeight))), m_gridHeight - 1);
+}
+
+void HeatMapPlotWindow::applyStageAxisRange()
+{
+    if (!m_colorMap || !m_colorMap->data()) {
+        return;
+    }
+    double x0 = 0.0;
+    double x1 = 1.0;
+    double y0 = 0.0;
+    double y1 = 1.0;
+    if (m_autoStageRangeMm) {
+        if (!m_stageBoundsValid) {
+            return;
+        }
+        x0 = m_stageXMinMm;
+        x1 = m_stageXMaxMm;
+        y0 = m_stageYMinMm;
+        y1 = m_stageYMaxMm;
+    } else {
+        x0 = m_stageXMinSpin->value();
+        x1 = m_stageXMaxSpin->value();
+        y0 = m_stageYMinSpin->value();
+        y1 = m_stageYMaxSpin->value();
+    }
+    auto padAxis = [](double a, double b) {
+        const double s = b - a;
+        if (s < 1e-9) {
+            return std::pair<double, double>(a - 0.5, b + 0.5);
+        }
+        const double p = s * 0.02;
+        return std::pair<double, double>(a - p, b + p);
+    };
+    const std::pair<double, double> rx = padAxis(x0, x1);
+    const std::pair<double, double> ry = padAxis(y0, y1);
+    m_colorMap->data()->setRange(QCPRange(rx.first, rx.second), QCPRange(ry.first, ry.second));
+    m_plot->xAxis->setRange(rx.first, rx.second);
+    m_plot->yAxis->setRange(ry.first, ry.second);
+}
+
+void HeatMapPlotWindow::refreshLiveHeatMapPlot()
+{
+    if (!m_colorMap || !m_colorMap->data()) {
+        return;
+    }
+    double lo = m_displayMin;
+    double hi = m_displayMax;
+    if (std::fabs(hi - lo) < 1e-300) {
+        lo -= 1.0;
+        hi += 1.0;
+    }
+    m_colorMap->setDataRange(QCPRange(lo, hi));
+    m_plot->xAxis->setLabel("台位 X (mm)");
+    m_plot->yAxis->setLabel("台位 Y (mm)");
+    applyStageAxisRange();
+    QString obsPart;
+    if (m_liveScalarRangeValid) {
+        obsPart = QStringLiteral(" | 实测[%1,%2]")
+                      .arg(m_liveScalarMin, 0, 'f', 3)
+                      .arg(m_liveScalarMax, 0, 'f', 3);
+    }
+    m_statsLabel->setText(QString("台位热力图 | 通道0 | 色标[%1,%2]%3 | 帧:%4 | 网格%5×%6")
+                              .arg(lo, 0, 'f', 3)
+                              .arg(hi, 0, 'f', 3)
+                              .arg(obsPart)
+                              .arg(m_liveFrameCount)
+                              .arg(m_gridWidth)
+                              .arg(m_gridHeight));
+    m_plot->replot();
+}
+
+void HeatMapPlotWindow::scheduleThrottledReplot()
+{
+    if (m_replotCoalesceTimer->isActive()) {
+        return;
+    }
+    const qint64 elapsed = m_replotThrottle.elapsed();
+    if (elapsed >= m_replotMinIntervalMs) {
+        m_replotThrottle.restart();
+        refreshLiveHeatMapPlot();
+        return;
+    }
+    const int wait = qMax(1, m_replotMinIntervalMs - static_cast<int>(elapsed));
+    m_replotCoalesceTimer->start(wait);
+}
+
+void HeatMapPlotWindow::clearHeatMapData()
+{
+    const double bg = m_displayMin;
+    m_gridData.fill(bg);
+    m_stageBoundsValid = false;
+    m_liveScalarRangeValid = false;
+    m_liveFrameCount = 0;
+    if (m_colorMap && m_colorMap->data()) {
+        for (int x = 0; x < m_gridWidth; ++x) {
+            for (int y = 0; y < m_gridHeight; ++y) {
+                m_colorMap->data()->setCell(x, y, bg);
+            }
+        }
+    }
+    m_replotThrottle.restart();
+    refreshLiveHeatMapPlot();
+}
+
 void HeatMapPlotWindow::updateFromFrame(const FrameData& frame)
 {
-    // 占位：未来实现如何从 FrameData 更新热力图
-    // 例如：将通道数据映射到热力图网格
-    Q_UNUSED(frame);
+    if (!m_colorMap || !frame.hasStagePose) {
+        return;
+    }
+    double val = 0.0;
+    if (!tryScalarValueForHeatmap(frame, &val)) {
+        return;
+    }
+    const double vx = frame.stageXMm;
+    const double vy = frame.stageYMm;
+    if (m_autoStageRangeMm) {
+        updateStageBoundsFromPoint(vx, vy);
+    }
+    int ix = 0;
+    int iy = 0;
+    mapMmToCell(vx, vy, &ix, &iy);
+    const int idx = iy * m_gridWidth + ix;
+    if (idx < 0 || idx >= m_gridData.size()) {
+        return;
+    }
+    m_gridData[idx] = val;
+    m_colorMap->data()->setCell(ix, iy, val);
+    if (!m_liveScalarRangeValid) {
+        m_liveScalarMin = m_liveScalarMax = val;
+        m_liveScalarRangeValid = true;
+    } else {
+        m_liveScalarMin = std::min(m_liveScalarMin, val);
+        m_liveScalarMax = std::max(m_liveScalarMax, val);
+    }
+    ++m_liveFrameCount;
+    scheduleThrottledReplot();
 }
 
 void HeatMapPlotWindow::exportImage(const QString& filename)
@@ -382,25 +684,61 @@ void HeatMapPlotWindow::onGridHeightChanged(int height)
 void HeatMapPlotWindow::onDataMinChanged(double min)
 {
     m_displayMin = min;
-    if (m_colorMap) {
+    if (!m_colorMap) {
+        return;
+    }
+    if (m_useMockData) {
         m_colorMap->setDataRange(QCPRange(m_displayMin, m_displayMax));
         m_plot->replot();
+    } else {
+        refreshLiveHeatMapPlot();
     }
 }
 
 void HeatMapPlotWindow::onDataMaxChanged(double max)
 {
     m_displayMax = max;
-    if (m_colorMap) {
+    if (!m_colorMap) {
+        return;
+    }
+    if (m_useMockData) {
         m_colorMap->setDataRange(QCPRange(m_displayMin, m_displayMax));
         m_plot->replot();
+    } else {
+        refreshLiveHeatMapPlot();
     }
+}
+
+void HeatMapPlotWindow::onAutoStageRangeToggled(bool checked)
+{
+    m_autoStageRangeMm = checked;
+    m_stageXMinSpin->setEnabled(!checked);
+    m_stageXMaxSpin->setEnabled(!checked);
+    m_stageYMinSpin->setEnabled(!checked);
+    m_stageYMaxSpin->setEnabled(!checked);
+    if (m_colorMap && !m_useMockData) {
+        refreshLiveHeatMapPlot();
+    }
+}
+
+void HeatMapPlotWindow::onStageRangeSpinChanged()
+{
+    if (!m_autoStageRangeMm && m_colorMap && !m_useMockData) {
+        refreshLiveHeatMapPlot();
+    }
+}
+
+void HeatMapPlotWindow::onClearHeatMapClicked()
+{
+    clearHeatMapData();
 }
 
 void HeatMapPlotWindow::onStartMockDataClicked()
 {
     m_useMockData = true;
     m_frameCount = 0;
+    m_liveFrameCount = 0;
+    m_liveScalarRangeValid = false;
     m_mockDataTimer->setInterval(50);  // 50ms 更新一次（20 FPS）
     m_mockDataTimer->start();
     m_startButton->setEnabled(false);
@@ -429,7 +767,9 @@ void HeatMapPlotWindow::onExportClicked()
 
 void HeatMapPlotWindow::onDataUpdated(const QVector<FrameData>& frames)
 {
-    // 暂未实现 FrameData 的绑定，仅保留占位接口
+    if (m_useMockData) {
+        return;
+    }
     for (const auto& frame : frames) {
         updateFromFrame(frame);
     }
@@ -457,5 +797,6 @@ void HeatMapPlotWindow::onCriticalFrame(const FrameData& frame)
 void HeatMapPlotWindow::onPlotSnapshotUpdated(const QSharedPointer<const PlotSnapshot>& snapshot)
 {
     Q_UNUSED(snapshot);
+    // 热力图依赖 FrameData 中的台位字段；PlotSnapshot 不含台位，故不从快照更新。
 }
 

@@ -74,6 +74,7 @@ set(SOURCE_FILES
     ApplicationController.cpp
     AppConfig.cpp
     PlotDataHub.cpp
+    StagePoseLatch.cpp
     PlotWindowManager.cpp
     MainWindow.cpp
 )
@@ -96,6 +97,7 @@ set(HEADER_FILES
     ApplicationController.h
     AppConfig.h
     PlotDataHub.h
+    StagePoseLatch.h
     PlotWindowManager.h
     MainWindow.h
 )

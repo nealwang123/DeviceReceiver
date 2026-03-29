@@ -423,6 +423,7 @@ bool AppConfig::loadFromFile(const QString& filename)
     } else {
         m_mockDataIntervalMs = settings.value("Serial/MockDataIntervalMs", m_mockDataIntervalMs).toInt();
     }
+    m_mockDataIntervalMs = qBound(10, m_mockDataIntervalMs, 60000);
     
     // 加载绘图配置
     m_maxPlotPoints = settings.value("Plot/MaxPoints", m_maxPlotPoints).toInt();

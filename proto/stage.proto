@@ -1,4 +1,4 @@
-﻿syntax = "proto3";
+syntax = "proto3";
 option csharp_namespace = "TriAxis.Grpc";
 package stage;
 
@@ -38,6 +38,9 @@ enum Axis {
   Z = 2;
 }
 
+// 单轴位置：pulse 与 mm 为同一时刻的两种表示。
+// - pulse：运动控制侧整数计数（步进脉冲/编码器计数等，由下位机定义；与 SetSpeedRequest.speedPulsePerSec 同体系）。
+// - mm：按标定换算后的物理位移（毫米），便于与 MoveAbsRequest 等 API 对齐。
 message AxisValue {
   int32 pulse = 1;
   double mm = 2;

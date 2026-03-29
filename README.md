@@ -502,7 +502,8 @@ cmd /c "build_and_run_fixed_cn.bat -Help"
 ### 自定义数据协议
 如需修改数据解析协议，请修改以下文件：
 - **`SerialReceiver.cpp`**: `parseRawData()` 函数中的协议解析逻辑
-- **`FrameData.h`**: 数据帧结构定义
+- **`FrameData.h`**: 数据帧结构定义（被测设备通道 + 可选三轴台位字段 `hasStagePose` / `stage*Mm` / `stage*Pulse` / `stageTimestampMs`）
+- **三轴台与 DUT 对齐**: 主采集线程写入 `DataCacheManager` 前，由 `StagePoseLatch` 将 **最近一次** `StageReceiverBackend` 台位（`stagePoseUpdated`）附加到每条 DUT 帧（last-known）；断开三轴台连接后会清空 latch。导出 CSV 使用 **`schema_version=2`**（追加台位列）；HDF5 增加分组 **`/stage_pose`**（`has_stage`、`stage_timestamp_ms_utc`、`x_mm`/`y_mm`/`z_mm`、`x_pulse`/`y_pulse`/`z_pulse`）。
 - **协议参数**: 帧头、帧长度、字节顺序等配置常量
 
 ### 扩展绘图功能

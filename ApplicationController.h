@@ -3,6 +3,7 @@
 
 #include <QObject>
 #include <QScopedPointer>
+#include "StagePoseLatch.h"
 
 // 前置声明，减少头文件依赖
 class DataCacheManager;
@@ -13,7 +14,6 @@ class AppConfig;
 class PlotWindowManager;
 class MainWindow;
 class QThread;
-
 /**
  * @brief 应用控制器类，负责协调所有模块的初始化和生命周期管理
  * 
@@ -183,7 +183,8 @@ private:
     PlotWindowManager* m_plotWindowManager = nullptr;  // 绘图窗口管理器
     QScopedPointer<MainWindow> m_mainWindow;  // 主界面窗口
     QString m_activeBackendType = "serial";
-    
+    StagePoseLatch m_stagePoseLatch;
+
     // 配置参数（后续可迁移到AppConfig类）
     struct {
         int maxCacheSize = 600;          // 最大缓存帧数
@@ -193,7 +194,7 @@ private:
         QString backendType = "serial"; // serial/grpc（被测设备；不含 stage）
         QString grpcEndpoint = "127.0.0.1:50051";
         bool useMockData = true;         // 是否使用模拟数据
-        int mockDataIntervalMs = 100;    // 模拟数据间隔（毫秒）
+        int mockDataIntervalMs = 100;    // 模拟/gRPC Subscribe 帧间隔（毫秒，勿用 1000 除非刻意 1Hz）
         int initialWindowCount = 1;      // 初始窗口数量
         PlotType initialWindowType = CombinedPlot; // 初始窗口类型
         QString defaultExportDirectory = "exports";

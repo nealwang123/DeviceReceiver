@@ -8,6 +8,7 @@ stage_grpc_test_server.py — 三轴台 StageService gRPC 桩（Python）
 功能概要
   - 实现 Connect / GetPositions / PositionStream / Jog / MoveAbs/Rel / SetSpeed / 扫描等 RPC
   - 用于无真实工装时的功能验证；默认 0.0.0.0:50052（可与被测设备 50051 并存）
+  - PositionStream：无 Jog 且尚未 Move/Jog 时按默认栅格弓字形步进 XY（0~1000mm，步距 10mm，与热力图默认一致）；MoveAbs/MoveRel/开 Jog 后锁定 XY。关闭：--no-serpentine
 
 运行
   python stage_grpc_test_server.py [--port 50052] [--host 0.0.0.0] [--external]
@@ -79,10 +80,40 @@ def _fill_positions(x_mm: float, y_mm: float, z_mm: float) -> stage_pb2.Position
     return r
 
 
+# 与 HeatMapPlotWindow 默认台位范围/步距对齐（弓字形扫查）
+SERP_X_MIN_MM = 0.0
+SERP_X_MAX_MM = 1000.0
+SERP_Y_MIN_MM = 0.0
+SERP_Y_MAX_MM = 1000.0
+SERP_X_STEP_MM = 10.0
+SERP_Y_STEP_MM = 10.0
+
+
+def _serpentine_grid_dims() -> tuple[int, int]:
+    """沿 X/Y 每步进一格的格点数（含端点）。"""
+    nx = int(round((SERP_X_MAX_MM - SERP_X_MIN_MM) / SERP_X_STEP_MM)) + 1
+    ny = int(round((SERP_Y_MAX_MM - SERP_Y_MIN_MM) / SERP_Y_STEP_MM)) + 1
+    return max(1, nx), max(1, ny)
+
+
+def _serpentine_xy_from_cell_index(cell_index: int) -> tuple[float, float]:
+    """弓字形（往返蛇形）：按格点下标离散步进，单位 mm。每收到一次 PositionStream 周期前进一格。"""
+    nx, ny = _serpentine_grid_dims()
+    n = nx * ny
+    k = cell_index % n if n > 0 else 0
+    row = k // nx
+    col = k % nx
+    if row % 2 == 1:
+        col = nx - 1 - col
+    x = SERP_X_MIN_MM + col * SERP_X_STEP_MM
+    y = SERP_Y_MIN_MM + row * SERP_Y_STEP_MM
+    return x, y
+
+
 class StageTestServicer(stage_pb2_grpc.StageServiceServicer):
     """模拟三轴台：位置 + Jog + 扫描状态，供控制端全功能验证。"""
 
-    def __init__(self) -> None:
+    def __init__(self, *, serpentine_demo: bool = True) -> None:
         self._lock = threading.Lock()
         self._x = 0.0
         self._y = 0.0
@@ -94,6 +125,11 @@ class StageTestServicer(stage_pb2_grpc.StageServiceServicer):
         self._accel_ms = 100
         self._scan_running = False
         self._scan_detail = ""
+        # True：PositionStream 在 vx=vy=vz=0 时用弓字形更新 XY（热力图联调）；False：仅 Jog/Move 改变位置
+        self._serpentine_demo = serpentine_demo
+        # MoveAbs/MoveRel/开启 Jog 后置 True，避免弓字形下一拍覆盖用户设定；Connect 时清零
+        self._user_xy_locked = False
+        self._serp_cell_index = 0
 
     def _jog_scale(self) -> float:
         if self._speed_pulse_per_sec < 1:
@@ -102,6 +138,9 @@ class StageTestServicer(stage_pb2_grpc.StageServiceServicer):
         return max(0.1, min(3.0, self._speed_pulse_per_sec / ref))
 
     def Connect(self, request, context):
+        with self._lock:
+            self._user_xy_locked = False
+            self._serp_cell_index = 0
         msg = f"stage-grpc-test-server: accepted stage TCP target {request.ip}:{request.port}"
         print(f"[Connect] {msg}")
         return stage_pb2.Result(ok=True, message=msg)
@@ -124,9 +163,20 @@ class StageTestServicer(stage_pb2_grpc.StageServiceServicer):
                 t0 = time.monotonic()
                 with self._lock:
                     dt = interval_ms / 1000.0
-                    self._x += self._jog_vx * dt
-                    self._y += self._jog_vy * dt
-                    self._z += self._jog_vz * dt
+                    jogging = (
+                        self._jog_vx != 0.0
+                        or self._jog_vy != 0.0
+                        or self._jog_vz != 0.0
+                    )
+                    if jogging:
+                        self._x += self._jog_vx * dt
+                        self._y += self._jog_vy * dt
+                        self._z += self._jog_vz * dt
+                    elif self._serpentine_demo and not self._user_xy_locked:
+                        sx, sy = _serpentine_xy_from_cell_index(self._serp_cell_index)
+                        self._serp_cell_index += 1
+                        self._x = sx
+                        self._y = sy
                     reply = _fill_positions(self._x, self._y, self._z)
                 yield reply
                 elapsed = time.monotonic() - t0
@@ -149,6 +199,7 @@ class StageTestServicer(stage_pb2_grpc.StageServiceServicer):
                 setattr(self, vp, 0.0)
                 print(f"[Jog] axis={request.axis} off")
                 return stage_pb2.Result(ok=True, message="jog off")
+            self._user_xy_locked = True
             v = base if request.plus else -base
             setattr(self, vp, v)
             print(f"[Jog] axis={request.axis} plus={request.plus} on")
@@ -156,6 +207,7 @@ class StageTestServicer(stage_pb2_grpc.StageServiceServicer):
 
     def MoveAbs(self, request, context):
         with self._lock:
+            self._user_xy_locked = True
             self._x = request.xMm
             self._y = request.yMm
             self._z = request.zMm
@@ -169,6 +221,7 @@ class StageTestServicer(stage_pb2_grpc.StageServiceServicer):
     def MoveRel(self, request, context):
         d = request.deltaMm
         with self._lock:
+            self._user_xy_locked = True
             if request.axis == stage_pb2.Axis.Y:
                 self._y += d
             elif request.axis == stage_pb2.Axis.Z:
@@ -282,9 +335,17 @@ def _print_bind_failure_help(port: int, host: str, err: BaseException) -> None:
     )
 
 
-def serve(port: int, host: str = "0.0.0.0", *, external_mode: bool = False) -> None:
+def serve(
+    port: int,
+    host: str = "0.0.0.0",
+    *,
+    external_mode: bool = False,
+    serpentine_demo: bool = True,
+) -> None:
     server = grpc.server(futures.ThreadPoolExecutor(max_workers=10))
-    stage_pb2_grpc.add_StageServiceServicer_to_server(StageTestServicer(), server)
+    stage_pb2_grpc.add_StageServiceServicer_to_server(
+        StageTestServicer(serpentine_demo=serpentine_demo), server
+    )
     listen_addr = f"{host}:{port}"
     try:
         bound = server.add_insecure_port(listen_addr)
@@ -367,9 +428,19 @@ def main():
         action="store_true",
         help="打印局域网/外网访问提示与本机 IPv4 枚举（不改变默认绑定，可与 --host 同用）",
     )
+    parser.add_argument(
+        "--no-serpentine",
+        action="store_true",
+        help="关闭 PositionStream 在无 Jog 时的弓字形 XY 演示（默认开启，便于热力图等需要 XY 同时变化的联调）",
+    )
     args = parser.parse_args()
     host = args.host if args.host is not None else "0.0.0.0"
-    serve(args.port, host=host, external_mode=args.external)
+    serve(
+        args.port,
+        host=host,
+        external_mode=args.external,
+        serpentine_demo=not args.no_serpentine,
+    )
 
 
 if __name__ == "__main__":

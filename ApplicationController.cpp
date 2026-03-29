@@ -368,9 +368,13 @@ bool ApplicationController::initReceiverBackend()
 
     QObject::connect(m_serialReceiver.get(), &IReceiverBackend::frameReceived,
                      this, [this](const FrameData& frame) {
-                         if (m_cacheManager) {
-                             m_cacheManager->addFrame(frame);
+                         if (!m_cacheManager) {
+                             return;
                          }
+                         FrameData copy = frame;
+                         // 附加最近一次三轴台位（mm + pulse）；与 DUT 时间戳可能不同，见 FrameData 注释
+                         m_stagePoseLatch.applyToFrame(copy);
+                         m_cacheManager->addFrame(copy);
                      }, Qt::DirectConnection);
 
     m_activeBackendType = backendType;
@@ -546,6 +550,15 @@ bool ApplicationController::connectStageBackend(const QString& endpoint)
 
     connectStageReceiverToMainWindow();
 
+    if (auto* stage = qobject_cast<StageReceiverBackend*>(m_stageReceiver.get())) {
+        QObject::connect(stage, &StageReceiverBackend::stagePoseUpdated,
+                         this,
+                         [this](double xMm, double yMm, double zMm, int xPulse, int yPulse, int zPulse, qint64 unixMs) {
+                             m_stagePoseLatch.update(xMm, yMm, zMm, xPulse, yPulse, zPulse, unixMs);
+                         },
+                         Qt::DirectConnection);
+    }
+
     bool connected = false;
     QMetaObject::invokeMethod(m_stageReceiver.get(), "connectBackend",
                               Qt::BlockingQueuedConnection,
@@ -563,6 +576,8 @@ bool ApplicationController::connectStageBackend(const QString& endpoint)
 void ApplicationController::disconnectStageBackend()
 {
     disconnectStageReceiverFromMainWindow();
+
+    m_stagePoseLatch.clear();
 
     if (m_stageReceiver && m_stageThread && m_stageThread->isRunning()) {
         QMetaObject::invokeMethod(m_stageReceiver.get(), "stopAcquisition",

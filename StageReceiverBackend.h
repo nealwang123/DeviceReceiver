@@ -64,6 +64,11 @@ public slots:
     void stopScan();
     void requestScanStatus();
 
+signals:
+    /// 三轴台位更新；unixMs 为 PositionsReply 时间戳。mm=毫米；pulse=驱动/编码器整数计数（见 stage.proto AxisValue）。
+    /// 不再通过 frameReceived 投递伪通道 FrameData，避免与 DUT 多通道混淆。
+    void stagePoseUpdated(double xMm, double yMm, double zMm, int xPulse, int yPulse, int zPulse, qint64 unixMs);
+
 private slots:
     void onMockTick();
     void onReconnectCheck();
@@ -110,7 +115,6 @@ private:
     QTimer* m_mockTimer      = nullptr;
     QTimer* m_reconnectTimer = nullptr;
     std::thread m_streamThread;
-    quint32 m_frameCounter = 0;
 
 #ifdef HAS_GRPC
     std::shared_ptr<grpc::Channel>                m_channel;

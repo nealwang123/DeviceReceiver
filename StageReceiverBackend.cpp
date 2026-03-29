@@ -1124,6 +1124,7 @@ void StageReceiverBackend::emitCommandResult(bool ok, const QString& command, co
     emit dataReceived(QJsonDocument(pkt).toJson(QJsonDocument::Compact), false);
 }
 
+// 将 GetPositions / PositionStream 的各轴 mm 与 pulse 下发：mm 为工程单位毫米，pulse 为下位机原始位置计数。
 void StageReceiverBackend::emitPositionsPacket(const QString& source,
                                                double xMm,
                                                double yMm,
@@ -1136,16 +1137,7 @@ void StageReceiverBackend::emitPositionsPacket(const QString& source,
 {
     const qint64 timestampMs = (unixMs > 0) ? unixMs : QDateTime::currentMSecsSinceEpoch();
 
-    FrameData frame;
-    frame.timestamp = timestampMs;
-    frame.frameId = static_cast<uint16_t>(++m_frameCounter);
-    frame.detectMode = FrameData::MultiChannelReal;
-    frame.channelCount = 3;
-    frame.channels_comp0 = {xMm, yMm, zMm};
-    frame.channels_comp1 = {static_cast<double>(xPulse),
-                            static_cast<double>(yPulse),
-                            static_cast<double>(zPulse)};
-    emit frameReceived(frame);
+    emit stagePoseUpdated(xMm, yMm, zMm, xPulse, yPulse, zPulse, timestampMs);
 
     if (!forceEmit && !shouldEmitRealtimePacket(timestampMs)) {
         return;

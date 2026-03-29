@@ -156,6 +156,7 @@ class DataGenerator:
                 frame.channels_comp1.append(phase)
         elif mode == MODE_COMPLEX:
             # 复数模式：comp0 = 实部, comp1 = 虚部
+            # 通道0：热力图常用 hypot(re,im)，模长多在约 0.65~1.35；与 HeatMapPlotWindow 默认色标 ~0.55~1.45 + jet 对齐
             for i in range(ch):
                 re = math.sin(2 * math.pi * self._freq[i] * t + self._phase[i])
                 im = math.cos(2 * math.pi * self._freq[i] * t + self._phase[i])
@@ -378,7 +379,7 @@ def main():
                         choices=["legacy", "real", "complex"],
                         help="检测模式 (默认 complex)")
     parser.add_argument("--interval", type=int, default=100,
-                        help="默认帧间隔毫秒数 (默认 100)")
+                        help="Subscribe 帧间隔毫秒数 (默认 100=10Hz；勿用 1000 除非刻意 1Hz)")
     parser.add_argument("--noise", type=float, default=0.3,
                         help="噪声幅度 (默认 0.3)")
 

@@ -233,6 +233,7 @@ SOURCES += main.cpp \
            ApplicationController.cpp \
            AppConfig.cpp \
            PlotDataHub.cpp \
+           StagePoseLatch.cpp \
            PlotWindowManager.cpp \
            MainWindow.cpp
 
@@ -253,6 +254,7 @@ HEADERS += FrameData.h \
            ApplicationController.h \
            AppConfig.h \
            PlotDataHub.h \
+           StagePoseLatch.h \
            PlotWindowManager.h \
            MainWindow.h
 

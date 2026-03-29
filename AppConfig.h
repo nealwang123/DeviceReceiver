@@ -183,7 +183,7 @@ private:
     QString m_grpcEndpoint;            // 构造时填默认本机 IPv6 + 端口
     QString m_stageGrpcEndpoint;
     bool m_useMockData = false;        // 是否使用模拟数据
-    int m_mockDataIntervalMs = 100;    // 模拟数据间隔（毫秒）
+    int m_mockDataIntervalMs = 100;    // 模拟数据间隔；gRPC 真机时为 Subscribe 请求的 interval_ms（毫秒）
     
 #ifndef QT_COMPILE_FOR_WASM
     // 串口高级配置（仅在非WASM环境下可用）
