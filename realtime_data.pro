@@ -228,6 +228,7 @@ SOURCES += main.cpp \
            PlotWindow.cpp \
            PlotWindowBase.cpp \
            HeatMapPlotWindow.cpp \
+           PulsedDecayPlotWindow.cpp \
            ArrayPlotWindow.cpp \
            DataProcessor.cpp \
            ApplicationController.cpp \
@@ -249,6 +250,7 @@ HEADERS += FrameData.h \
            PlotWindow.h \
            PlotWindowBase.h \
            HeatMapPlotWindow.h \
+           PulsedDecayPlotWindow.h \
            ArrayPlotWindow.h \
            DataProcessor.h \
            ApplicationController.h \

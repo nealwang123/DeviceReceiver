@@ -23,13 +23,16 @@ class ApplicationController : public QObject
 {
     Q_OBJECT
 public:
-    // PlotWindowManager::PlotType的前向声明
+    /// 与 PlotWindowManager::PlotType 枚举顺序一致（勿打乱，createPlotWindow 内 static_cast 依赖序值）
     enum PlotType {
         CombinedPlot,
         TemperaturePlot,
         HumidityPlot,
         VoltagePlot,
-        HistoryPlot
+        HistoryPlot,
+        HeatmapPlot,
+        ArrayPlot,
+        PulsedDecayPlot
     };
 
     /**

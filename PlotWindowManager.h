@@ -30,7 +30,8 @@ public:
         VoltagePlot,      // 电压图
         HistoryPlot,      // 历史数据图
         HeatmapPlot,      // 热力图
-        ArrayPlot         // 阵列图（多通道分轴显示）
+        ArrayPlot,        // 阵列图（多通道分轴显示）
+        PulsedDecayPlot   // 脉冲涡流衰减曲线（多脉冲叠加 + 静态参考线）
     };
 
     /**

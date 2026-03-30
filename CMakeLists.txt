@@ -70,6 +70,7 @@ set(SOURCE_FILES
     PlotWindowBase.cpp
     HeatMapPlotWindow.cpp
     ArrayPlotWindow.cpp
+    PulsedDecayPlotWindow.cpp
     DataProcessor.cpp
     ApplicationController.cpp
     AppConfig.cpp
@@ -93,6 +94,7 @@ set(HEADER_FILES
     PlotWindowBase.h
     HeatMapPlotWindow.h
     ArrayPlotWindow.h
+    PulsedDecayPlotWindow.h
     DataProcessor.h
     ApplicationController.h
     AppConfig.h

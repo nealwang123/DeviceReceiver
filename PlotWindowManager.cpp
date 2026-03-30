@@ -2,6 +2,7 @@
 #include "PlotWindow.h"
 #include "HeatMapPlotWindow.h"
 #include "ArrayPlotWindow.h"
+#include "PulsedDecayPlotWindow.h"
 #include "DataCacheManager.h"
 #include "AppConfig.h"
 #include "PlotDataHub.h"
@@ -123,6 +124,10 @@ PlotWindow* PlotWindowManager::createWindow(PlotType type, QWidget* parent)
     case ArrayPlot:
         window = new ArrayPlotWindow(parent);
         title = "阵列图6";
+        break;
+    case PulsedDecayPlot:
+        window = new PulsedDecayPlotWindow(parent);
+        title = "脉冲衰减7";
         break;
     default:
         window = new PlotWindow(parent);
